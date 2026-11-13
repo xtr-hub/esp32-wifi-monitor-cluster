@@ -222,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="truncate each line to this many characters (0 = no limit)")
     parser.add_argument("--show-private", action="store_true",
                         help="reveal addresses, identifiers, text and payload bytes")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     pd.SHOW_PRIVATE = args.show_private
 
