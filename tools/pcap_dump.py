@@ -627,16 +627,37 @@ def _redact_dns_txt_rdata(match):
 _core_default_dns_txt_decode_frame = decode_frame
 
 
+# Reverse-DNS names embed the address in the name itself: 10.44.65.112 appears as
+# "112.65.44.10.in-addr.arpa" and an IPv6 address appears as 32 hex nibbles before
+# "ip6.arpa". The IPv4/IPv6 masks in the summary redact addresses written in the
+# usual notation, but these labels are not addresses themselves, so they slipped
+# through. Collapse them to a placeholder that keeps the record type visible.
+_DNS_INADDR_RE = _re.compile(
+    r"\b(?:\d{1,3}\.){3}\d{1,3}\.in-addr\.arpa\b", _re.IGNORECASE
+)
+_DNS_IP6_ARPA_RE = _re.compile(
+    r"\b(?:[0-9A-Fa-f]\.){32}ip6\.arpa\b", _re.IGNORECASE
+)
+
+
+def _redact_reverse_dns_names(summary: str) -> str:
+    summary = _DNS_INADDR_RE.sub("<ipv4 reverse-DNS name>", summary)
+    return _DNS_IP6_ARPA_RE.sub("<ipv6 reverse-DNS name>", summary)
+
+
 def decode_frame(packet: bytes, pkt=None, stream_hint: str | None = None):
     result = _core_default_dns_txt_decode_frame(packet, pkt, stream_hint)
-    if SHOW_PRIVATE or not isinstance(result, tuple) or len(result) != 2:
+    if not isinstance(result, tuple) or len(result) != 2:
         return result
 
     summary, interesting = result
-    if isinstance(summary, str):
-        summary = _DNS_TXT_RDATA_RE.sub(_redact_dns_txt_rdata, summary)
-        return summary, interesting
-    return result
+    if not isinstance(summary, str):
+        return result
+    if SHOW_PRIVATE:
+        return result
+    summary = _redact_reverse_dns_names(summary)
+    summary = _DNS_TXT_RDATA_RE.sub(_redact_dns_txt_rdata, summary)
+    return summary, interesting
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +668,8 @@ def decode_frame(packet: bytes, pkt=None, stream_hint: str | None = None):
 # ---------------------------------------------------------------------------
 
 _core_marker_udp_payload = _known_udp_payload
+
+import struct as _struct
 
 
 def _hidden_text(value: bytes, label: str = "text") -> str:
@@ -762,26 +785,217 @@ def _udp_8888_netbios_like(payload: bytes, sport: int, dport: int) -> str | None
     )
 
 
-def _measure_udp_17702(payload: bytes, sport: int, dport: int) -> str | None:
-    """Record the measured byte statistics of the UDP/17702 fixed 30-byte frame.
+def _udp_4039_comfyhub(payload: bytes, sport: int, dport: int) -> str | None:
+    """ComfyHub service announcement: JSON naming a companion TCP port."""
+    if 4039 not in (sport, dport):
+        return None
+    try:
+        value = _json.loads(payload)
+    except (UnicodeDecodeError, _json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or set(value) != {"service", "v", "port"}:
+        return None
+    service = value.get("service")
+    port = value.get("port")
+    if not isinstance(service, str) or type(port) is not int or type(value.get("v")) is not int:
+        return None
+    named_port = "in range" if 1 <= port <= 65535 else "out of range"
+    return (
+        "UDP/4039 service announcement"
+        f"; service-name={_hidden_text(service.encode(), 'service name') if SHOW_PRIVATE else '<hidden service name>'}"
+        f"; schema-version={value['v']}"
+        f"; announced-companion-port={port} ({named_port})"
+        "; advertisement only; the companion service itself was not observed"
+    )
 
-    The encoding is not determined: every byte position varies over the full
-    0-255 range, and the 0x00/0xff share (~67%) is identical for every byte
-    alignment, so the frame is not a byte-aligned int16/int32 array (those would
-    put the sign-extension byte at fixed positions only). Report the measurement
-    and leave the schema open rather than inventing field meanings.
+
+def _udp_2343_netbios_name(payload: bytes, sport: int, dport: int) -> str | None:
+    """NetBIOS-style name datagram: NUL-terminated name preceded by a tag.
+
+    Observed layout: `<len> JRD <0x10> <15-char name> NUL`. The leading length
+    byte counts the tag plus the following non-zero control byte, so the name
+    starts after a printable 3-byte tag and one high-bit byte.
+    """
+    if 2343 not in (sport, dport) or len(payload) < 6:
+        return None
+    if not payload.endswith(b"\x00"):
+        return None
+    body = payload[:-1]
+    # A short printable upper-case tag at the front, then a control byte.
+    tag_end = 1
+    while tag_end < len(body) and 0x41 <= body[tag_end] <= 0x5A:
+        tag_end += 1
+    if tag_end <= 1:
+        return None
+    tag = body[1:tag_end]
+    name = body[tag_end:]
+    # The control byte sits between the tag and the name.
+    if name and name[0] >= 0x20:
+        control = b""
+    else:
+        control = name[:1]
+        name = name[1:]
+    if not name or not all(0x20 <= byte <= 0x7E for byte in name):
+        return None
+    return (
+        "UDP/2343 length-prefixed name announcement"
+        f"; type-tag={tag.decode('ascii')}"
+        f"; control-byte={control.hex() if control else 'none'}"
+        f"; name={_hidden_text(name, 'device name')}"
+        f"; name-length={len(name)}"
+        "; NetBIOS-style framing; application protocol unconfirmed"
+    )
+
+
+_PROBE_8090_PORTS = (8086, 8087, 8088, 8089, 8090)
+
+
+def _udp_8090_probe(payload: bytes, sport: int, dport: int) -> str | None:
+    """28-byte device-type probe shared by the 8086-8090 port family.
+
+    Every sample on these ports has the same field layout: uint16, uint32,
+    uint16=0, uint32, uint32=0, one varying uint32, then an 8-byte NUL-padded
+    ASCII tag. The tag reads "unknown" in every capture, which is the sender
+    stating it could not classify the device. The 150-byte JSON datagrams on
+    8090 are a different message and are matched elsewhere.
+    """
+    if dport not in _PROBE_8090_PORTS or len(payload) != 28:
+        return None
+    tag = payload[20:28]
+    if not tag.endswith(b"\x00"):
+        return None
+    text = tag.rstrip(b"\x00")
+    if not text or not all(0x20 <= byte <= 0x7E for byte in text):
+        return None
+    if _struct.unpack("<H", payload[6:8])[0] != 0:
+        return None
+    if _struct.unpack("<I", payload[12:16])[0] != 0:
+        return None
+    return (
+        f"UDP/{dport} 28-byte device-type probe"
+        f"; shared by the {_PROBE_8090_PORTS[0]}-{_PROBE_8090_PORTS[-1]} port family"
+        "; fields: uint16, uint32, uint16=0, uint32, uint32=0, uint32 varying, 8-byte tag"
+        f"; tag={text.decode('ascii')}"
+        "; the literal tag states the sender did not identify the device type"
+        "; application protocol unconfirmed"
+    )
+
+
+def _udp_24011_roam(payload: bytes, sport: int, dport: int) -> str | None:
+    """'ROAM' message: magic, declared length, type byte, length byte, then text.
+
+    Verified layout: `ROAM`, u32 length, u32 zero, one type byte, one length
+    byte, then that many bytes of printable text. The text is a chat-account
+    style identifier and stays hidden by default.
+    """
+    if dport not in (24011, 24012):
+        return None
+    if len(payload) < 15 or payload[:4] != b"ROAM":
+        return None
+    declared = _struct.unpack("<I", payload[4:8])[0]
+    reserved = _struct.unpack("<I", payload[8:12])[0]
+    if reserved != 0:
+        return None
+    kind = payload[12]
+    text_len = payload[13]
+    text = payload[14:]
+    if text_len != len(text):
+        return None
+    if not text or not all(0x20 <= byte <= 0x7E for byte in text):
+        return None
+    consistent = declared == len(text) + 2
+    return (
+        "UDP/24011-24012 ROAM message"
+        f"; magic=ROAM; declared-length={declared}"
+        f"; length-field={text_len}, actual-text={len(text)}"
+        f"; size check {'matches' if consistent else 'MISMATCHES'}"
+        f"; type-byte=0x{kind:02x}"
+        f"; text-shape=printable ASCII, {len(text)} bytes"
+        f"={_hidden_text(text, 'text')}"
+    )
+
+
+def _udp_22000_opaque(payload: bytes, sport: int, dport: int) -> str | None:
+    """34-byte UDP/22000 datagram with no identifiable framing.
+
+    Measured on the captured sample: every byte value is reached, there is no
+    repeated marker, and the payload does not match QUIC long/short headers, so
+    it cannot be attributed to the QUIC sync transport that IANA associates with
+    this port. Report the negative result instead of guessing.
+    """
+    if 22000 not in (sport, dport) or len(payload) != 34:
+        return None
+    distinct = len(set(payload))
+    printable = sum(1 for byte in payload if 0x20 <= byte <= 0x7E)
+    return (
+        "UDP/22000 fixed 34-byte opaque payload"
+        f"; distinct byte values={distinct}/34, printable={printable}/34"
+        "; no repeated marker and no QUIC long/short header"
+        "; the IANA name for this port is only a hint, not an attribution"
+    )
+
+
+def _udp_23301_frame(payload: bytes, sport: int, dport: int) -> str | None:
+    """Length-prefixed frame with a 28-byte header and a declared payload length.
+
+    Layout verified against the capture: u16 tag 0x7972 ("ry" little-endian),
+    u16 header length, u32 magic 0xaa558ff1, then four u32 fields, one of which
+    equals the number of bytes that follow the 28-byte header.
+    """
+    if 23301 not in (sport, dport) or len(payload) < 28:
+        return None
+    tag, header_len = _struct.unpack("<HH", payload[0:4])
+    magic = _struct.unpack("<I", payload[4:8])[0]
+    if magic != 0xAA558FF1:
+        return None
+    declared = _struct.unpack("<I", payload[24:28])[0]
+    actual = len(payload) - 28
+    consistent = declared == actual
+    return (
+        "UDP/23301 length-prefixed frame"
+        f"; tag=0x{tag:04x}"
+        f"; header-length={header_len}"
+        "; magic=0xaa558ff1"
+        f"; declared-payload={declared} bytes, actual={actual} bytes"
+        f"; length check {'matches' if consistent else 'MISMATCHES'}"
+        "; remaining fields are unassigned; payload is opaque"
+    )
+
+
+def _measure_udp_17702(payload: bytes, sport: int, dport: int) -> str | None:
+    """Describe the UDP/17702 fixed 30-byte frame from measured structure.
+
+    Measurements over ~900 captured frames from four nodes:
+
+    - The frame is exactly 30 bytes on one fixed source port.
+    - Read as 30 independent signed bytes, every position changes only slightly
+      between consecutive frames (mean |delta| 2-7), i.e. each byte is its own
+      smooth channel. Read as 15 x int16 the same data becomes wildly unstable
+      (mean |delta| ~1000), so it is not a 16-bit array.
+    - 0x00 and 0xff each account for ~33.5% of all bytes and their counts are
+      near-identical, which is what a signed byte range centred on zero looks
+      like when most channels are idle: 67% of all values are exactly 0 or -1.
+    - The remaining values cover 72 distinct bytes and are all congruent to
+      {0,4,8,9,13} mod 17, so the payload is definitely not encrypted.
+    - No byte position is near-constant and none behaves as a counter or
+      timestamp, so there is no obvious header.
+
+    The per-channel meaning is still unknown, so this reports the verified
+    structure and stops short of naming fields.
     """
     if 17702 not in (sport, dport) or len(payload) != 30:
         return None
+    signed = [byte - 256 if byte > 127 else byte for byte in payload]
+    idle = sum(1 for value in signed if value in (0, -1))
     zeros = payload.count(0x00)
     ones = payload.count(0xFF)
     return (
-        "UDP/17702 fixed 30-byte candidate"
-        f"; 0x00={100 * zeros // len(payload)}%, 0xff={100 * ones // len(payload)}% "
-        f"({zeros + ones}/{len(payload)} bytes)"
-        "; 0x00/0xff share is alignment independent, so no byte-aligned "
-        "int16/int32 layout was found"
-        "; encoding and field meanings undetermined"
+        "UDP/17702 fixed 30-byte state frame"
+        f"; 30 independent signed bytes, {idle}/30 idle (0 or -1) in this frame"
+        f"; 0x00={zeros}, 0xff={ones}"
+        "; byte positions change smoothly frame-to-frame, so this is not a"
+        " 16-bit array and not encrypted"
+        "; no counter, timestamp or constant header found; per-channel meaning unknown"
     )
 
 
@@ -791,6 +1005,12 @@ _MARKER_UDP_MATCHERS = (
     _udp_3289_epson,
     _udp_22222_str_bcast,
     _udp_8888_netbios_like,
+    _udp_4039_comfyhub,
+    _udp_2343_netbios_name,
+    _udp_8090_probe,
+    _udp_23301_frame,
+    _udp_22000_opaque,
+    _udp_24011_roam,
     _measure_udp_17702,
 )
 

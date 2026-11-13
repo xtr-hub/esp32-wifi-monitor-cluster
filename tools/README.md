@@ -44,8 +44,11 @@ entropy, printable-span offsets), never payload values unless asked.
 ```powershell
 py tools/dev/payload_scan.py captures --files 4        # per-port datagram counts
 py tools/dev/payload_shape.py captures --ports 10004   # shape of one port
-py tools/dev/analyze_17702.py                          # UDP/17702 layout tests
+py tools/dev/analyze_payload.py --port 17702           # layout tests for one port
 ```
 
-`analyze_17702.py` resolves `captures/` relative to the repository root, so it
-works regardless of the current directory.
+`analyze_payload.py` is the tool to reach for when a payload is unidentified. It
+reports length distribution, which of the 256 byte values actually occur,
+fixed-versus-variable offsets, frame-to-frame smoothness (which distinguishes
+8-bit channels from multi-byte integers), per-bit constancy, and any monotonic
+counter candidate.

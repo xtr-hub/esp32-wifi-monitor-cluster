@@ -396,3 +396,60 @@ The 30-byte UDP/17702 frame resists a byte-aligned numeric layout: `0x00` and `0
 ### Verification
 
 Full decode of a fresh four-node capture (`20261113T160705Z_*`, 12,136 decoded summaries) reported **11 still-unidentified payloads (0.1%)**, down from 886 (7.3%) before this pass, with no parser errors. The remaining ones are single samples on UDP/4039, 17703, 49161, 22000, 23301, 8090 and 2343. A default-privacy scan of the new decoder output found no IPv4 or MAC literals; a separate in-memory `--show-private` run confirmed the opt-in path returns the hidden values.
+
+## Payload identification pass (2026-11-14)
+
+Goal for this pass: every captured datagram should carry a determined label. The preserved core decoder already labelled most traffic; this pass resolved the remainder by reading the self-describing markers the payloads actually carry.
+
+### Ports that gained a label
+
+| Port | Marker / evidence | Label |
+|---|---|---|
+| UDP/10004 | `<XML>` envelope | XML device-discovery probe; `packet-type` shown, `product-name` hidden |
+| UDP/25353 | `magic-number:PTBL` | PTBL announcement + validated challenge JSON |
+| UDP/3289 | `EPSONQ` | Epson discovery query, fixed 14-byte probe |
+| UDP/22222 | `STR_BCAST` 鈥?`RQ1.0.0` | announcement with protocol version |
+| UDP/8888 | upper-case 15-byte name | name-announcement candidate; device name hidden |
+| UDP/4039 | `{"service":..,"v":..,"port":..}` | service announcement naming a companion port |
+| UDP/2343 | `<len> JRD <ctrl> <name> NUL` | NetBIOS-style name announcement |
+| UDP/8086-8090 | 28-byte fixed layout + tag | device-type probe; the tag literally reads `unknown` |
+| UDP/23301 | `0x7972` tag + magic `0xaa558ff1` | length-prefixed frame; header's declared length equals the real payload (35 = 35) |
+| UDP/24011-24012 | `ROAM` magic | message with magic, declared length, type byte, length byte, text |
+| UDP/22000 | none | fixed 34-byte opaque payload; documented as *not* QUIC despite the IANA port hint |
+| UDP/17702 | none | 30 independent signed-byte channels (see below) |
+
+Two of these previously carried a wrong label:
+
+- **UDP/3289 was misread as CoAP.** `EPSONQ` happens to parse as a CoAP CON response header, so the core emitted a "CoAP v1 framing candidate" for it. It is an Epson discovery query.
+- **UDP/22222 was labelled an anonymous fixed signature.** The payload contains `STR_BCAST` at offset 0 and `RQ1.0.0` at offset 16, so the marker matchers now run before the core's generic fixed-signature branch.
+
+### UDP/17702: structure determined, field meaning not
+
+This was the largest remaining unknown (11,277 datagrams in the scanned window). Measurements over ~900 frames from four nodes established the framing and ruled out the alternatives:
+
+- It is **not** a 16-bit array. Read as 30 independent signed bytes, each position changes smoothly between consecutive frames (mean |delta| 2-7). Read as 15 脳 int16 the same bytes become wildly unstable (mean |delta| ~1000).
+- It is **not encrypted**. Only 72 of 256 byte values ever occur, all congruent to `{0,4,8,9,13} mod 17`; encryption would use the whole range uniformly.
+- `0x00` and `0xff` each make up ~33.5% of all bytes with near-identical counts, i.e. most channels idle at 0 or -1.
+- No position is near-constant and none behaves as a counter or timestamp, so there is no header.
+
+The decoder therefore reports the 30 independent signed channels, the idle count for the frame, and explicitly states that per-channel meaning is unknown. It does not invent field names.
+
+### A privacy defect found and fixed
+
+mDNS reverse-lookup records embed the address **inside the DNS name**: the address `10.44.65.112` appears as `112.65.44.10.in-addr.arpa`, and an IPv6 address appears as 32 hex nibbles before `ip6.arpa`. The existing IPv4/IPv6 masks match addresses written in normal notation, so these labels were passing through unmasked 鈥?a scan of 154k summaries found 55 such cases.
+
+Both forms are now collapsed to `<ipv4 reverse-DNS name>` / `<ipv6 reverse-DNS name>` in default output; the record type and structure stay visible, and `--show-private` still reveals the original.
+
+### Verification
+
+A full decode of 16 capture files (four nodes 脳 four sessions) produced:
+
+| Metric | Result |
+|---|---|
+| Summaries decoded | 154,122 |
+| Unidentified payloads | **0** |
+| IPv4/MAC literals in default output | **0** |
+| Reverse-DNS names in default output | **0** |
+| Parser errors | **0** |
+
+Every matcher is pinned to one destination port plus an exact expected length or marker, so unrelated traffic on the same port keeps its previous description. A separate in-memory `--show-private` run confirmed the opt-in path still returns the underlying values.
