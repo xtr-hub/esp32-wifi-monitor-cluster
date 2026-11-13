@@ -1,0 +1,50 @@
+# --- ESP-IDF build output ---
+build/
+build-*/
+*.bin
+*.elf
+*.map
+*.uf2
+
+# --- ESP-IDF local configuration (holds Wi-Fi credentials and the OTA token) ---
+sdkconfig
+sdkconfig.old
+sdkconfig.ci
+dependencies.lock
+
+# Managed components are re-fetched by the component manager from idf_component.yml.
+managed_components/
+
+# --- Captured traffic and derived data (multi-gigabyte, never commit) ---
+captures/
+telemetry.jsonl
+*.pcap
+*.pcap.offset
+decoded-*.txt
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# --- Logs ---
+*.log
+*.err.log
+*.out.log
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# --- Editors and OS ---
+.vscode/
+.idea/
+.cache/
+.commandcode/
+Thumbs.db
+desktop.ini
+
+# The retained decoder core is a build artifact of the upstream decoder, but it
+# is the only copy of the bytecode parser and pcap_dump.py loads it at runtime.
+!tools/pcap_dump_core.pyc

@@ -1,0 +1,36 @@
+# ESP-IDF project defaults for the Wi-Fi monitor cluster.
+#
+# These are safe, non-secret build settings. Real credentials live in the local
+# `sdkconfig`, which is git-ignored; copy the blanks below there and fill them in,
+# or run `idf.py menuconfig` and edit "ESP Wi-Fi Monitor".
+# Alternatively pass them on the command line, e.g.:
+#   idf.py -DMONITOR_WIFI_SSID='"esp-lab"' build
+
+# Two 1700 KiB OTA application slots; requires at least 4 MB flash.
+CONFIG_PARTITION_TABLE_TWO_OTA_LARGE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# --- Wi-Fi join (leave SSID empty for standalone sniffer mode) ---
+# CONFIG_MONITOR_WIFI_SSID="esp-lab"
+# CONFIG_MONITOR_WIFI_PASSWORD="change-me"
+# Optional: pin the station to one AP radio, format xx:xx:xx:xx:xx:xx.
+# CONFIG_MONITOR_WIFI_BSSID=""
+
+# --- Collector and node identity ---
+# CONFIG_MONITOR_COLLECTOR_IP="192.168.137.1"
+# CONFIG_MONITOR_COLLECTOR_PORT=9000
+# CONFIG_MONITOR_NODE_NAME="esp-node"
+
+# Cap the per-node frame upload so several nodes do not saturate the shared
+# radio. KB/s, 0 disables the cap.
+CONFIG_MONITOR_MAX_KBPS=64
+
+# --- HTTP control, OTA ---
+# CONFIG_MONITOR_OTA_TOKEN="generate-a-unique-token"
+CONFIG_MONITOR_OTA_PORT=8080
+
+# --- Standalone capture mode (when no SSID is configured) ---
+# CONFIG_MONITOR_CAPTURE_5G=y
+# CONFIG_MONITOR_CAPTURE_CHANNEL=157
+
+CONFIG_MONITOR_WIFI_JOIN_TIMEOUT_SECONDS=60

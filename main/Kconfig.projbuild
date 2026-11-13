@@ -1,0 +1,87 @@
+menu "ESP Wi-Fi Monitor"
+
+    config MONITOR_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+
+    config MONITOR_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+
+    config MONITOR_WIFI_BSSID
+        string "Pin to BSSID (xx:xx:xx:xx:xx:xx, empty = any)"
+        default ""
+        help
+            Force the station to associate with one specific AP radio. Leave empty
+            to let the driver pick the strongest BSSID for the configured SSID.
+
+    choice MONITOR_CAPTURE_BAND
+        prompt "Standalone capture band (used when Wi-Fi SSID is empty)"
+        default MONITOR_CAPTURE_5G if IDF_TARGET_ESP32C5
+        default MONITOR_CAPTURE_2G
+
+        config MONITOR_CAPTURE_2G
+            bool "2.4 GHz"
+
+        config MONITOR_CAPTURE_5G
+            bool "5 GHz (ESP32-C5 only)"
+            depends on IDF_TARGET_ESP32C5
+    endchoice
+
+    config MONITOR_CAPTURE_CHANNEL
+        int "Standalone capture channel"
+        range 1 14 if MONITOR_CAPTURE_2G
+        range 36 177 if MONITOR_CAPTURE_5G
+        default 157 if MONITOR_CAPTURE_5G
+        default 1
+
+    config MONITOR_COLLECTOR_IP
+        string "Collector IPv4 address"
+        default "10.44.6.132"
+
+    config MONITOR_COLLECTOR_PORT
+        int "Collector UDP port"
+        range 1 65535
+        default 9000
+
+    config MONITOR_OTA_TOKEN
+        string "Local OTA upload token"
+        default ""
+
+    config MONITOR_OTA_PORT
+        int "OTA upload port"
+        range 1 65535
+        default 8080
+
+    config MONITOR_NODE_NAME
+        string "Node name"
+        default "esp-node"
+
+    config MONITOR_MAX_KBPS
+        int "Capture upload limit per node (KB/s, 0 = unlimited)"
+        range 0 10000
+        default 64
+        help
+            Token-bucket cap for the raw frame datagrams a node sends to the
+            collector. Frames over the budget are counted but not transmitted.
+            Lower this when several nodes share one Wi-Fi link with the laptop.
+
+    config MONITOR_WIFI_JOIN_TIMEOUT_SECONDS
+        int "Wi-Fi join indication timeout (seconds)"
+        range 1 3600
+        default 60
+        help
+            Time to blink the status LED while waiting for a usable Wi-Fi IP address.
+            After this timeout the LED stays orange while background reconnect attempts continue.
+
+    config MONITOR_STATUS_LED_GPIO
+        int "Addressable RGB status LED GPIO (-1 disables LED)"
+        range -1 28
+        default 27 if IDF_TARGET_ESP32C5
+        default 8 if IDF_TARGET_ESP32C3
+        help
+            Defaults match ESP32-C5-MINI-KIT / ESP32-C5-DevKitC-1 (GPIO27)
+            and ESP32-C3-DevKitC-02 (GPIO8).
+            Change this for a different carrier board, or set -1 to build without LED support.
+
+endmenu
