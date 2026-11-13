@@ -15,6 +15,8 @@ Starter firmware and a small UDP collector for an ESP32-C5 monitor cluster (four
 │   └── idf_component.yml     Managed component dependencies
 ├── tools/                    Host-side Python (run from the repository root)
 │   ├── collector.py          UDP 9000 receiver → per-node PCAP + telemetry.jsonl
+│   ├── frames.py             Frame source layer: PCAP, growing PCAP, live iface
+│   ├── watch.py              Live viewer: filter, format, statistics
 │   ├── pcap_dump.py          Layer-2..7 decoder with privacy masking
 │   ├── pcap_dump_core.pyc    Retained core bytecode parser loaded by pcap_dump.py
 │   ├── cbor_decode.py        Bounded RFC 8949 CBOR candidate parsing
@@ -26,6 +28,61 @@ Starter firmware and a small UDP collector for an ESP32-C5 monitor cluster (four
 ├── captures/                 Recorded PCAPs and sanitized samples (git-ignored)
 └── build/, build-c3/         ESP-IDF output (git-ignored)
 ```
+
+The host side is layered so the firmware and the analysis tools never depend on
+each other: the node only sends raw frames, `collector.py` only writes them to
+PCAP, `frames.py` only reads frames from a source, `pcap_dump.py` only decodes,
+and `watch.py` only filters and formats.
+
+```
+ESP32 node ──UDP──▶ collector.py ──▶ captures/*.pcap
+                                          │ frames.py
+                                          │ pcap_dump.py
+                                          │ watch.py
+```
+
+Because `frames.py` and `pcap_dump.py` know nothing about ESP32 or this
+repository's layout, they also work as a standalone 802.11 analyser against any
+Radiotap/raw-802.11 PCAP or a live monitor-mode interface. Only the ESP32 node
+has a fixed role; every layer above it can be replaced or removed independently.
+
+## Live view
+
+`watch.py` is the command to use while the cluster runs. It follows every node
+PCAP from the last complete record, decodes each frame, and prints one compact
+line per frame.
+
+```powershell
+# follow all node captures, hiding the usual discovery noise
+py tools/watch.py captures/*.pcap --exclude mDNS,ARP,LLMNR --stats 5
+
+# only one protocol family
+py tools/watch.py captures/*.pcap --ports 4039,10004
+
+# one node, every 50th frame, truncated lines
+py tools/watch.py captures/*_aa-bb-cc-dd-ee-ff.pcap --every 50 --width 120
+
+# read a finished capture once
+py tools/watch.py captures/<file>.pcap --static
+
+# live interface instead of a PCAP
+py tools/watch.py --interface wlan0mon
+```
+
+| Option | Meaning |
+|---|---|
+| `--exclude LIST` | Drop labels such as `mDNS,ARP,LLMNR` — the fastest way to see real application traffic |
+| `--apps LIST` | Keep only labels such as `mDNS`, `CoAP`, `UDP/4039` |
+| `--ports LIST` | Keep only these UDP/TCP ports (source or destination) |
+| `--stats S` | Every S seconds print frames/s and a per-protocol histogram |
+| `--all` | Include frames with no application detail |
+| `--every N` | Print every Nth matching frame |
+| `--seconds N` / `--limit N` | Bounded runs for scripting |
+| `--width N` | Truncate lines |
+| `--show-private` | Reveal addresses, identifiers, text and payload bytes |
+
+A frame carries **both** a port label and a protocol label, so `--apps mDNS` and
+`--apps UDP/5353` select the same frames.
 
 Everything under `tools/` is invoked from the repository root, e.g. `py tools/pcap_dump.py captures/<file>.pcap --decode`. `pcap_dump.py` loads `pcap_dump_core.pyc` from its own directory, so those two must stay together.
 
