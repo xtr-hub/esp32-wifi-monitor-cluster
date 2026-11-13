@@ -46,6 +46,40 @@ ESP32 node  ──UDP──▶  collector.py  ──▶  captures/*.pcap   (raw 
 | View | `cli.py`, `watch.py` | Dispatch, filter, format, print. No protocol logic. |
 | Control | `node.py`, `ota_deploy.py` | Talk to a node's HTTP endpoints. |
 
+### How the live view works
+
+There is no streaming protocol between the collector and the viewer. The
+collector appends frames to a PCAP file and the viewer follows that file:
+
+```
+UDP 9000 ──▶ collector.py ──append──▶ captures/<session>_<node>.pcap
+                                              ▲
+                                              │ poll tail (0.4 s)
+                                        frames.py PcapTail
+```
+
+Three details make this safe:
+
+- **Append, flush every 256 frames.** The collector writes each record as it
+  arrives and calls `flush()` periodically, so the file grows continuously.
+- **Record-boundary tracking.** `PcapTail` remembers the byte offset of the last
+  complete record. On each poll it reads from there and stops if a record header
+  or body is incomplete, leaving the offset untouched so the unfinished record is
+  retried next poll. A frame is therefore never delivered twice or half-formed.
+- **Collector checkpoint (optional).** The collector also writes a `<file>.offset`
+  sidecar with the last flushed boundary. `PcapTail` uses it when present and
+  falls back to scanning for the last complete record when absent, so deleting
+  the sidecar does not break anything.
+
+`wimon/tests/test_frames.py` covers these properties, including a deliberately
+truncated final record:
+
+```powershell
+py wimon\tests\test_frames.py
+```
+
+`frames show` itself opens **no sockets**. Only `capture start` binds UDP 9000.
+
 `frames.py` and `pcap_dump.py` have no dependency on this repository's layout or
 on the ESP32 firmware, so they work as a general 802.11 capture analyser. Copy
 those two files into another project and point them at any Radiotap or raw
