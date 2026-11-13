@@ -64,7 +64,7 @@ def _udp_json_candidate(payload: bytes, sport: int, dport: int) -> str | None:
 
     try:
         value = _json.loads(payload)
-    except (UnicodeDecodeError, _json.JSONDecodeError, TypeError):
+    except (UnicodeDecodeError, _json.JSONDecodeError, TypeError, RecursionError):
         return description
 
     if not isinstance(value, dict) or set(value) != set(field_types):
@@ -367,23 +367,31 @@ _SOFTBUS_OPAQUE_TEXT_FIELDS = frozenset({"servicedata", "extendservicedata"})
 _SOFTBUS_BASE64_CANDIDATE_FIELDS = frozenset({"castplus", "ntype", "cscore", "nscore"})
 
 
-def _softbus_redacted_shape(value):
+def _softbus_redacted_shape(value, inside_service_data: bool = False):
+    """Shape JSON while hiding service-data text.
+
+    `inside_service_data` propagates into nested structure so a value that is an
+    object or array (not just a string) is masked too: the promise is that
+    service-data content is hidden, regardless of the JSON type the sender used.
+    """
     if isinstance(value, dict):
         shaped = {}
         for key, item in value.items():
             field = str(key).lower()
-            if (
-                field in _SOFTBUS_OPAQUE_TEXT_FIELDS
-                and isinstance(item, str)
-                and item
-                and not (item.startswith("<") and item.endswith(">"))
-            ):
+            in_service = inside_service_data or field in _SOFTBUS_OPAQUE_TEXT_FIELDS
+
+            if in_service and isinstance(item, str) and item:
+                if item.startswith("<") and item.endswith(">"):
+                    shaped[key] = item
+                    continue
                 try:
                     nested = _json.loads(item)
-                except (UnicodeDecodeError, _json.JSONDecodeError, TypeError):
+                except (UnicodeDecodeError, _json.JSONDecodeError, TypeError, RecursionError):
                     shaped[key] = f"<hidden text, {len(item)} chars>"
                 else:
-                    shaped[key] = _softbus_redacted_shape(_core_redact_json(nested))
+                    shaped[key] = _softbus_redacted_shape(
+                        _core_redact_json(nested), inside_service_data=False
+                    )
                 continue
 
             if (
@@ -401,7 +409,7 @@ def _softbus_redacted_shape(value):
                         validate=True,
                     )
                 except (ValueError, TypeError):
-                    shaped[key] = _softbus_redacted_shape(item)
+                    shaped[key] = f"<hidden text, {len(item)} chars>"
                 else:
                     if 0 < len(decoded) <= 8:
                         shaped[key] = (
@@ -410,13 +418,21 @@ def _softbus_redacted_shape(value):
                             f"{'s' if len(decoded) != 1 else ''}>"
                         )
                     else:
-                        shaped[key] = _softbus_redacted_shape(item)
+                        # A longer decode is still opaque; report its size only.
+                        shaped[key] = (
+                            "<base64-shaped opaque data; "
+                            f"{len(decoded)} decoded bytes>"
+                        )
                 continue
 
-            shaped[key] = _softbus_redacted_shape(item)
+            shaped[key] = _softbus_redacted_shape(item, in_service)
         return shaped
     if isinstance(value, list):
-        return [_softbus_redacted_shape(item) for item in value]
+        return [_softbus_redacted_shape(item, inside_service_data) for item in value]
+    if inside_service_data and isinstance(value, str) and value:
+        if value.startswith("<") and value.endswith(">"):
+            return value
+        return f"<hidden text, {len(value)} chars>"
     return value
 
 
@@ -587,14 +603,37 @@ def decode_frame(packet: bytes, pkt=None, stream_hint: str | None = None):
 # TXT records often carry device names, serials, versions, or other local
 # identifiers. Preserve the TXT keys and record structure while hiding values
 # by default; --show-private remains the explicit opt-in path.
+#
+# rdata is arbitrary payload text and may itself contain ';'. Stop at the next
+# field separator the decoder emits (a new RR / "UDP ...") instead of at any
+# semicolon, otherwise the tail of a value escapes masking.
 _DNS_TXT_RDATA_RE = _re.compile(
-    r"(?P<prefix>\bTXT\b[^;]*?\brdata=)(?P<rdata>[^;]*)(?=;|$)",
+    r"(?P<prefix>\bTXT\b[^;]*?\brdata=)"
+    r"(?P<rdata>.*?)"
+    r"(?=;\s*(?:UDP|TCP|ttl=|SRV|PTR|TXT|A\b|AAAA\b|mDNS|;;)|$)",
     _re.IGNORECASE,
 )
 _DNS_TXT_SEPARATOR_RE = _re.compile(r"(\s+\|\s+)")
 _DNS_TXT_SAFE_PLACEHOLDER_RE = _re.compile(
     r"^<(?:hidden(?:, [^>]+)?|redacted|masked|ipv4|ipv6|domain|device-name|host-name|"
     r"base64-shaped opaque data)(?:>|[;,])",
+    _re.IGNORECASE,
+)
+# Only annotations the decoder itself appends are trusted to survive masking.
+# Anything else after " (" is payload text and must be hidden with the value.
+_DNS_TXT_KNOWN_ANNOTATION_RE = _re.compile(
+    r"^\((?:"
+    r"Bluetooth address|"
+    r"Bonjour authentication tag|"
+    r"HomeKit authentication tag|"
+    r"HomeKit rotating ID|"
+    r"discovery nonce|"
+    r"advertised (?:flags|version)|"
+    r"opaque value|"
+    r"rotating value|"
+    r"bit meanings unknown|"
+    r"meaning unknown"
+    r")",
     _re.IGNORECASE,
 )
 
@@ -608,6 +647,13 @@ def _redact_dns_txt_rdata(match):
             continue
 
         field, annotation_separator, annotation = part.partition(" (")
+        # Treat text after " (" as payload unless it is a known decoder
+        # annotation; a TXT value can legitimately contain " (".
+        if annotation and not _DNS_TXT_KNOWN_ANNOTATION_RE.match("(" + annotation):
+            field = part
+            annotation_separator = ""
+            annotation = ""
+
         if "=" in field:
             key, separator, value = field.partition("=")
             if value and not _DNS_TXT_SAFE_PLACEHOLDER_RE.match(value):
@@ -646,7 +692,19 @@ def _redact_reverse_dns_names(summary: str) -> str:
 
 
 def decode_frame(packet: bytes, pkt=None, stream_hint: str | None = None):
-    result = _core_default_dns_txt_decode_frame(packet, pkt, stream_hint)
+    """Decode one frame, never raising on hostile or truncated input.
+
+    The preserved core assumes a Radiotap header and well-formed JSON. Both
+    assumptions can be violated by a 1-byte frame or a deeply nested payload, so
+    this outermost layer converts any unexpected exception into a short summary.
+    A live viewer reads untrusted network traffic and must keep going.
+    """
+    try:
+        result = _core_default_dns_txt_decode_frame(packet, pkt, stream_hint)
+    except (struct.error, RecursionError, UnicodeDecodeError, ValueError,
+            IndexError, KeyError, TypeError, MemoryError) as error:
+        return f"undecodable frame ({type(error).__name__}: {error})", False
+
     if not isinstance(result, tuple) or len(result) != 2:
         return result
 
@@ -690,7 +748,11 @@ def _udp_10004_xml_discovery(payload: bytes, sport: int, dport: int) -> str | No
     if not packet_type:
         return None
     parts = ["UDP/10004 XML discovery message candidate"]
-    parts.append(f"packet-type={packet_type.group(1)}")
+    # The body of either tag is arbitrary sender-supplied text, so both are
+    # masked by default; --show-private reveals them.
+    parts.append(
+        f"packet-type={_hidden_text(packet_type.group(1).encode(), 'packet type')}"
+    )
     if product:
         parts.append(f"product-name={_hidden_text(product.group(1).encode(), 'product name')}")
     parts.append("discovery probe; application protocol vendor unconfirmed")
@@ -714,7 +776,7 @@ def _udp_25353_ptbl(payload: bytes, sport: int, dport: int) -> str | None:
     if body.strip().startswith("{"):
         try:
             parsed = _json.loads(body.strip())
-        except _json.JSONDecodeError:
+        except (_json.JSONDecodeError, RecursionError):
             shape = "malformed"
         else:
             shape = "valid"
@@ -726,7 +788,7 @@ def _udp_25353_ptbl(payload: bytes, sport: int, dport: int) -> str | None:
         parts.append(f"xor-key={key.group(1) if SHOW_PRIVATE else '<hidden, ' + str(len(key.group(1))) + ' hex digits>'}")
     parts.append(f"challenge-json={shape}")
     if isinstance(kind, str):
-        parts.append(f"request-type={kind}")
+        parts.append(f"request-type={_hidden_text(kind.encode(), 'request type')}")
     parts.append("protocol attribution unconfirmed")
     return "; ".join(parts)
 
@@ -791,7 +853,7 @@ def _udp_4039_comfyhub(payload: bytes, sport: int, dport: int) -> str | None:
         return None
     try:
         value = _json.loads(payload)
-    except (UnicodeDecodeError, _json.JSONDecodeError):
+    except (UnicodeDecodeError, _json.JSONDecodeError, RecursionError):
         return None
     if not isinstance(value, dict) or set(value) != {"service", "v", "port"}:
         return None
@@ -821,25 +883,23 @@ def _udp_2343_netbios_name(payload: bytes, sport: int, dport: int) -> str | None
     if not payload.endswith(b"\x00"):
         return None
     body = payload[:-1]
-    # A short printable upper-case tag at the front, then a control byte.
-    tag_end = 1
-    while tag_end < len(body) and 0x41 <= body[tag_end] <= 0x5A:
-        tag_end += 1
-    if tag_end <= 1:
+    # Strict shape: <len> <3 upper-case tag> <control byte> <name>. Requiring the
+    # tag to be exactly three letters stops the scanner from swallowing the first
+    # characters of a bare name, which would otherwise be echoed as the tag.
+    if len(body) < 5:
         return None
-    tag = body[1:tag_end]
-    name = body[tag_end:]
-    # The control byte sits between the tag and the name.
-    if name and name[0] >= 0x20:
-        control = b""
-    else:
-        control = name[:1]
-        name = name[1:]
+    tag = body[1:4]
+    control = body[4:5]
+    name = body[5:]
+    if len(tag) != 3 or not all(0x41 <= byte <= 0x5A for byte in tag):
+        return None
+    if control and 0x20 <= control[0] <= 0x7E:
+        return None
     if not name or not all(0x20 <= byte <= 0x7E for byte in name):
         return None
     return (
         "UDP/2343 length-prefixed name announcement"
-        f"; type-tag={tag.decode('ascii')}"
+        f"; type-tag={_hidden_text(tag, 'type tag')}"
         f"; control-byte={control.hex() if control else 'none'}"
         f"; name={_hidden_text(name, 'device name')}"
         f"; name-length={len(name)}"
@@ -867,15 +927,22 @@ def _udp_8090_probe(payload: bytes, sport: int, dport: int) -> str | None:
     text = tag.rstrip(b"\x00")
     if not text or not all(0x20 <= byte <= 0x7E for byte in text):
         return None
+    # Tighten the structural checks so unrelated 28-byte traffic on this port
+    # family is not relabelled: the observed probe has 0x0000 at offset 0, the
+    # two zero fields, and a tag that is literally "unknown".
+    if payload[0:2] != b"\x00\x00":
+        return None
     if _struct.unpack("<H", payload[6:8])[0] != 0:
         return None
     if _struct.unpack("<I", payload[12:16])[0] != 0:
         return None
+    if text != b"unknown":
+        return None
     return (
         f"UDP/{dport} 28-byte device-type probe"
         f"; shared by the {_PROBE_8090_PORTS[0]}-{_PROBE_8090_PORTS[-1]} port family"
-        "; fields: uint16, uint32, uint16=0, uint32, uint32=0, uint32 varying, 8-byte tag"
-        f"; tag={text.decode('ascii')}"
+        "; fields: uint16=0, uint32, uint16=0, uint32, uint32=0, uint32 varying, 8-byte tag"
+        "; tag=unknown"
         "; the literal tag states the sender did not identify the device type"
         "; application protocol unconfirmed"
     )
@@ -888,7 +955,7 @@ def _udp_24011_roam(payload: bytes, sport: int, dport: int) -> str | None:
     byte, then that many bytes of printable text. The text is a chat-account
     style identifier and stays hidden by default.
     """
-    if dport not in (24011, 24012):
+    if not {sport, dport} & {24011, 24012}:
         return None
     if len(payload) < 15 or payload[:4] != b"ROAM":
         return None
@@ -927,10 +994,22 @@ def _udp_22000_opaque(payload: bytes, sport: int, dport: int) -> str | None:
         return None
     distinct = len(set(payload))
     printable = sum(1 for byte in payload if 0x20 <= byte <= 0x7E)
+    # A QUIC short header has the fixed bit (0x40) set and is at least 1+8+1
+    # bytes; a v1 long header has 0x80 set. Check the first byte instead of
+    # asserting the absence of a header.
+    first = payload[0]
+    long_header = bool(first & 0x80)
+    fixed_bit = bool(first & 0x40)
+    if long_header:
+        framing = "first byte has the long-header form bit set"
+    elif fixed_bit:
+        framing = "first byte has the QUIC fixed bit; header form unconfirmed"
+    else:
+        framing = "no QUIC long-short header marker in the first byte"
     return (
         "UDP/22000 fixed 34-byte opaque payload"
         f"; distinct byte values={distinct}/34, printable={printable}/34"
-        "; no repeated marker and no QUIC long/short header"
+        f"; {framing}"
         "; the IANA name for this port is only a hint, not an attribution"
     )
 
@@ -962,41 +1041,71 @@ def _udp_23301_frame(payload: bytes, sport: int, dport: int) -> str | None:
     )
 
 
+# Previous payload per UDP/17702 flow, used to measure frame-to-frame change.
+_UDP_17702_PREVIOUS: dict[tuple[int, int], bytes] = {}
+
+
 def _measure_udp_17702(payload: bytes, sport: int, dport: int) -> str | None:
-    """Describe the UDP/17702 fixed 30-byte frame from measured structure.
+    """Describe the UDP/17702 fixed 30-byte frame, measuring what it claims.
 
-    Measurements over ~900 captured frames from four nodes:
+    Earlier assessments over ~900 frames from four nodes established:
 
-    - The frame is exactly 30 bytes on one fixed source port.
-    - Read as 30 independent signed bytes, every position changes only slightly
-      between consecutive frames (mean |delta| 2-7), i.e. each byte is its own
-      smooth channel. Read as 15 x int16 the same data becomes wildly unstable
-      (mean |delta| ~1000), so it is not a 16-bit array.
-    - 0x00 and 0xff each account for ~33.5% of all bytes and their counts are
-      near-identical, which is what a signed byte range centred on zero looks
-      like when most channels are idle: 67% of all values are exactly 0 or -1.
-    - The remaining values cover 72 distinct bytes and are all congruent to
-      {0,4,8,9,13} mod 17, so the payload is definitely not encrypted.
-    - No byte position is near-constant and none behaves as a counter or
-      timestamp, so there is no obvious header.
+    - read as 30 independent signed bytes, every position changes only slightly
+      between consecutive frames (mean |delta| 2-7), while 15 x int16 makes the
+      same bytes wildly unstable (mean |delta| ~1000), so it is not a 16-bit
+      array;
+    - 0x00 and 0xff each account for ~33.5% of all bytes with near-identical
+      counts, i.e. a signed range centred on zero with most channels idle;
+    - only 72 byte values ever occur and they are congruent to {0,4,8,9,13}
+      mod 17, which rules out encryption.
 
-    The per-channel meaning is still unknown, so this reports the verified
-    structure and stops short of naming fields.
+    Those facts are properties of the stream, not of one datagram, so this
+    matcher keeps the previous payload per flow and reports the measured
+    frame-to-frame delta. If the comparison has not run yet it says so instead
+    of asserting the result.
     """
     if 17702 not in (sport, dport) or len(payload) != 30:
         return None
+
     signed = [byte - 256 if byte > 127 else byte for byte in payload]
     idle = sum(1 for value in signed if value in (0, -1))
     zeros = payload.count(0x00)
     ones = payload.count(0xFF)
-    return (
-        "UDP/17702 fixed 30-byte state frame"
-        f"; 30 independent signed bytes, {idle}/30 idle (0 or -1) in this frame"
-        f"; 0x00={zeros}, 0xff={ones}"
-        "; byte positions change smoothly frame-to-frame, so this is not a"
-        " 16-bit array and not encrypted"
-        "; no counter, timestamp or constant header found; per-channel meaning unknown"
-    )
+
+    # Per-flow previous frame, bounded so a busy capture cannot grow the map.
+    flow = (sport, dport)
+    previous = _UDP_17702_PREVIOUS.get(flow)
+    _UDP_17702_PREVIOUS[flow] = payload
+    if len(_UDP_17702_PREVIOUS) > 32:
+        _UDP_17702_PREVIOUS.pop(next(iter(_UDP_17702_PREVIOUS)))
+
+    parts = [
+        "UDP/17702 fixed 30-byte state frame",
+        f"30 signed bytes, {idle}/30 idle (0 or -1) in this frame",
+        f"0x00={zeros}, 0xff={ones}",
+    ]
+    if previous is not None and len(previous) == 30:
+        delta = sum(abs(a - b) for a, b in zip(signed, [
+            byte - 256 if byte > 127 else byte for byte in previous
+        ]))
+        mean = delta / 30
+        if mean <= 12:
+            parts.append(
+                f"mean |delta| across the 30 positions vs the previous frame={mean:.1f}, "
+                "consistent with independent smooth channels rather than a 16-bit array"
+            )
+        else:
+            parts.append(
+                f"mean |delta| vs the previous frame={mean:.1f}, so the smooth-channel "
+                "reading does not hold for this pair"
+            )
+    else:
+        parts.append("no previous frame for this flow yet; frame-to-frame delta not measured")
+
+    parts.append("per-channel meaning unknown")
+    return "; ".join(parts)
+
+
 
 
 _MARKER_UDP_MATCHERS = (

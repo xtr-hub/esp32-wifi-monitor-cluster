@@ -14,6 +14,8 @@ wimon node status        read /status from a node
 wimon node config        read or change /config on a node
 wimon node update        push a firmware image over HTTP
 wimon node list          list nodes known from telemetry
+wimon self test          run the bundled test suites
+wimon self doctor        check interpreter, decoder core, captures and telemetry
 ```
 
 Run it from the repository root as `.\wimon.cmd <noun> <verb>`, or `py
@@ -179,6 +181,29 @@ modifying anything.
 A node's `/config` rejects an invalid `collector_ip`, a port outside 1–65535, or
 `max_kbps` outside 0–10000, and changes nothing when any field is invalid.
 
+## Tests
+
+Four suites, 53 tests, no test framework required:
+
+```powershell
+py wimon\tests\run_all.py         # everything
+py wimon\cli.py self test         # same, through the CLI
+py wimon\tests\run_all.py privacy # one suite (prefix match)
+py wimon\cli.py self doctor       # environment check
+```
+
+| Suite | Covers |
+|---|---|
+| `test_frames.py` | tail reader: partial records withheld, resume at a boundary, no loss while a file grows, link types 127/105, bad files rejected |
+| `test_privacy.py` | each matcher's identifying field is hidden by default and revealed by `--show-private`; TXT semicolon/parenthesis cases; reverse DNS; SoftBus shapes |
+| `test_decoder.py` | every prefix of a real frame decodes without raising; short matcher payloads; deeply nested JSON; 300 random port/length combinations; both ROAM directions; declared-length checks; capture-level "zero unclassified, zero address literals" |
+| `test_cli.py` | noun/verb dispatch, argument forwarding, error codes, telemetry merge, node client against a local HTTP server, token handling |
+
+The capture-dependent tests skip themselves when `captures/` has no PCAP, so the
+suite also runs on a fresh clone. `self doctor` reports the interpreter, whether
+`pcap_dump_core.pyc` loads, the capture directory size, the telemetry file, and
+whether scapy is available for live-interface capture.
+
 ## Privacy
 
 Every layer masks addresses, identifiers and payload text by default. Masked
@@ -187,7 +212,9 @@ output still keeps the structure — record types, field names, lengths,
 came from.
 
 `--show-private` is the single opt-in switch. It works on `frames show`, `frames
-decode` and the `dev/` helpers.
+decode` and the `dev/` helpers. A frame the decoder cannot parse is reported as
+`undecodable frame (<reason>)` rather than raising, so hostile input cannot stop
+a live view.
 
 ## Standalone modules
 

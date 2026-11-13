@@ -65,7 +65,6 @@ def test_static_read() -> None:
         got = list(read_records(case.path))
         assert len(got) == 2, f"expected 2 records, got {len(got)}"
         assert got[0] == bodies[0] and got[1] == bodies[1]
-    print("ok  static read returns every record unchanged")
 
 
 def test_linktype_105_gets_radiotap() -> None:
@@ -76,7 +75,6 @@ def test_linktype_105_gets_radiotap() -> None:
         assert len(got) == 1
         assert got[0][:8] == struct.pack("<BBHI", 0, 0, 8, 0), "radiotap not prepended"
         assert got[0][8:] == body, "802.11 body altered"
-    print("ok  raw 802.11 PCAPs get a synthesised radiotap header")
 
 
 def test_partial_record_is_withheld() -> None:
@@ -94,7 +92,6 @@ def test_partial_record_is_withheld() -> None:
         got = tail.read_new()
         assert len(got) == 1, f"expected the finished record, got {len(got)}"
         assert tail.position > boundary
-    print("ok  a partially written record is held back until it is complete")
 
 
 def test_half_body_is_withheld() -> None:
@@ -104,7 +101,6 @@ def test_half_body_is_withheld() -> None:
         tail = PcapTail(case.path, from_start=True)
         got = tail.read_new()
         assert len(got) == 1, f"expected 1 complete record, got {len(got)}"
-    print("ok  a half-written body is not returned")
 
 
 def test_tail_resumes_at_boundary() -> None:
@@ -120,7 +116,6 @@ def test_tail_resumes_at_boundary() -> None:
         write_pcap(case.path, bodies + [b"new-record!"])
         got = resume.read_new()
         assert len(got) == 1, f"expected 1 appended record, got {len(got)}"
-    print("ok  a tail reader resumes at the last complete record")
 
 
 def test_no_record_is_lost_while_growing() -> None:
@@ -140,7 +135,6 @@ def test_no_record_is_lost_while_growing() -> None:
             f"delivered {len(delivered)} of {len(written)} records"
         )
         assert delivered == written, "records arrived out of order or corrupted"
-    print("ok  growing-file polling delivers every record exactly once")
 
 
 def test_bad_magic_is_rejected() -> None:
@@ -152,7 +146,6 @@ def test_bad_magic_is_rejected() -> None:
             pass
         else:
             raise AssertionError("a non-PCAP file was accepted")
-    print("ok  a non-PCAP file is rejected with PcapError")
 
 
 def test_unsupported_linktype_is_rejected() -> None:
@@ -166,20 +159,10 @@ def test_unsupported_linktype_is_rejected() -> None:
             pass
         else:
             raise AssertionError("an unsupported link type was accepted")
-    print("ok  an unsupported link type is rejected with PcapError")
 
 
 def main() -> int:
-    tests = [
-        test_static_read,
-        test_linktype_105_gets_radiotap,
-        test_partial_record_is_withheld,
-        test_half_body_is_withheld,
-        test_tail_resumes_at_boundary,
-        test_no_record_is_lost_while_growing,
-        test_bad_magic_is_rejected,
-        test_unsupported_linktype_is_rejected,
-    ]
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0
     for test in tests:
         try:
@@ -187,6 +170,11 @@ def main() -> int:
         except AssertionError as error:
             failures += 1
             print(f"FAIL {test.__name__}: {error}")
+        except Exception as error:
+            failures += 1
+            print(f"ERROR {test.__name__}: {type(error).__name__}: {error}")
+        else:
+            print(f"ok   {test.__name__}")
     print(f"\n{len(tests) - failures}/{len(tests)} passed")
     return 1 if failures else 0
 

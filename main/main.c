@@ -95,7 +95,15 @@ static void config_load(void)
     char text[CONFIG_NAME_MAX];
     size_t length = sizeof(text);
     if (nvs_get_str(handle, "collector_ip", text, &length) == ESP_OK && text[0]) {
-        strlcpy(g_config.collector_ip, text, sizeof(g_config.collector_ip));
+        // Validate the stored value the same way /config does. A corrupted or
+        // legacy entry would otherwise reach inet_addr() and silently become
+        // INADDR_NONE, i.e. 255.255.255.255, broadcasting telemetry to the LAN.
+        struct in_addr parsed_address;
+        if (inet_pton(AF_INET, text, &parsed_address) == 1) {
+            strlcpy(g_config.collector_ip, text, sizeof(g_config.collector_ip));
+        } else {
+            ESP_LOGW(TAG, "ignoring invalid stored collector IP; using build default");
+        }
     }
     uint16_t port = 0;
     if (nvs_get_u16(handle, "collector_port", &port) == ESP_OK && port != 0) {
@@ -403,11 +411,23 @@ static bool send_capture_datagram(int sock, const struct sockaddr_in *destinatio
 
 static bool ota_token_ok(httpd_req_t *request)
 {
+    // An unset or placeholder token must authenticate nothing. Comparing two
+    // empty strings would otherwise succeed, because a request carrying an empty
+    // X-OTA-Token header yields an empty supplied value -- letting anyone on the
+    // LAN push firmware or rewrite the collector address.
+    if (CONFIG_MONITOR_OTA_TOKEN[0] == '\0' ||
+        strcmp(CONFIG_MONITOR_OTA_TOKEN, "change-this-token") == 0) {
+        return false;
+    }
     char supplied_token[96] = {0};
-    return httpd_req_get_hdr_value_str(request, "X-OTA-Token", supplied_token,
-                                       sizeof(supplied_token)) == ESP_OK &&
-           strcmp(CONFIG_MONITOR_OTA_TOKEN, "change-this-token") != 0 &&
-           strcmp(supplied_token, CONFIG_MONITOR_OTA_TOKEN) == 0;
+    if (httpd_req_get_hdr_value_str(request, "X-OTA-Token", supplied_token,
+                                    sizeof(supplied_token)) != ESP_OK) {
+        return false;
+    }
+    if (supplied_token[0] == '\0') {
+        return false;
+    }
+    return strcmp(supplied_token, CONFIG_MONITOR_OTA_TOKEN) == 0;
 }
 
 static esp_err_t ota_upload_handler(httpd_req_t *request)
@@ -443,6 +463,10 @@ static esp_err_t ota_upload_handler(httpd_req_t *request)
     while (remaining > 0) {
         int wanted = remaining < (int)sizeof(buffer) ? remaining : (int)sizeof(buffer);
         int received = httpd_req_recv(request, buffer, wanted);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            // A slow link is not a failed upload; retry instead of aborting.
+            continue;
+        }
         if (received <= 0) {
             esp_ota_abort(handle);
             httpd_resp_set_status(request, "400 Bad Request");
@@ -475,12 +499,25 @@ static esp_err_t ota_upload_handler(httpd_req_t *request)
 
 static esp_err_t status_handler(httpd_req_t *request)
 {
+    // Snapshot the mutable configuration under the lock so the JSON cannot mix
+    // a half-written name or address with the rest of the response.
+    char name[CONFIG_NAME_MAX];
+    char collector_ip[16];
+    uint16_t collector_port;
+    uint16_t max_kbps;
+    xSemaphoreTake(g_config_mutex, portMAX_DELAY);
+    strlcpy(name, g_config.node_name, sizeof(name));
+    strlcpy(collector_ip, g_config.collector_ip, sizeof(collector_ip));
+    collector_port = g_config.collector_port;
+    max_kbps = g_config.max_kbps;
+    xSemaphoreGive(g_config_mutex);
+
     char json[420];
     int used = snprintf(json, sizeof(json),
         "{\"node\":\"%s\",\"name\":\"%s\",\"ip\":\"%s\",\"channel\":%u,\"bssid\":\"%s\","
         "\"collector_ip\":\"%s\",\"collector_port\":%u,\"max_kbps\":%u,\"hostname\":\"%s.local\"}",
-        g_node_id, g_config.node_name, g_ip, g_channel, g_bssid,
-        g_config.collector_ip, g_config.collector_port, g_config.max_kbps,
+        g_node_id, name, g_ip, g_channel, g_bssid,
+        collector_ip, collector_port, max_kbps,
         g_mdns_hostname);
     if (used <= 0 || (size_t)used >= sizeof(json)) {
         return httpd_resp_send_500(request);
@@ -491,9 +528,20 @@ static esp_err_t status_handler(httpd_req_t *request)
 
 static const char *json_value_start(const char *body, const char *key)
 {
+    // A quoted key must be preceded by '{' or ',' at the object level. Plain
+    // strstr would also match a key name that appears inside a string value,
+    // e.g. {"name":"\"collector_ip\":\"9.9.9.9\""}; requiring the separator
+    // rejects that shape. Escapes are refused outright by the handler, so the
+    // value scan below cannot be confused by them.
     char pattern[24];
     if (snprintf(pattern, sizeof(pattern), "\"%s\"", key) >= (int)sizeof(pattern)) return NULL;
-    const char *found = strstr(body, pattern);
+    const char *found = body;
+    while ((found = strstr(found, pattern)) != NULL) {
+        const char *before = found;
+        while (before > body && (before[-1] == ' ' || before[-1] == '\t')) before--;
+        if (before == body || before[-1] == '{' || before[-1] == ',') break;
+        found++;
+    }
     if (!found) return NULL;
     found += strlen(pattern);
     while (*found == ' ' || *found == '\t') found++;
@@ -522,6 +570,10 @@ static bool json_number_field(const char *body, const char *key, long *value)
     char *end = NULL;
     long parsed = strtol(found, &end, 10);
     if (end == found) return false;
+    // Reject trailing garbage such as 8080abc so a malformed body cannot be
+    // accepted as a valid number.
+    while (*end == ' ' || *end == '\t') end++;
+    if (*end != ',' && *end != '}' && *end != '\0') return false;
     *value = parsed;
     return true;
 }
@@ -540,29 +592,58 @@ static esp_err_t config_handler(httpd_req_t *request)
     }
 
     char body[CONFIG_BODY_MAX + 1];
-    int received = httpd_req_recv(request, body, request->content_len);
-    if (received <= 0) {
-        httpd_resp_set_status(request, "400 Bad Request");
-        httpd_resp_sendstr(request, "config body not received\n");
-        return ESP_OK;
+    // httpd_req_recv can return fewer bytes than requested, so read until the
+    // whole declared body has arrived. A short read would otherwise parse a
+    // truncated document and apply part of the change while answering 200.
+    int received = 0;
+    while (received < request->content_len) {
+        int chunk = httpd_req_recv(request, body + received,
+                                   request->content_len - received);
+        if (chunk == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (chunk <= 0) {
+            httpd_resp_set_status(request, "400 Bad Request");
+            httpd_resp_sendstr(request, "config body not received\n");
+            return ESP_OK;
+        }
+        received += chunk;
     }
     body[received] = '\0';
 
+    // The flat parser does not unescape, so a backslash anywhere would make the
+    // parsed value differ from what the client sent. Refuse it instead of
+    // applying something else.
+    if (strchr(body, '\\') != NULL) {
+        httpd_resp_set_status(request, "400 Bad Request");
+        httpd_resp_sendstr(request, "escaped characters are not supported\n");
+        return ESP_OK;
+    }
+
     // A flat JSON object is all this endpoint accepts; the fields are validated
-    // first so a partially invalid body never changes the running config.
+    // first so a partially invalid body never changes the running config. Read
+    // the current values under the lock to avoid a torn snapshot.
     char ip[16];
     char name[CONFIG_NAME_MAX];
+    uint16_t port;
+    uint16_t max_kbps;
+    xSemaphoreTake(g_config_mutex, portMAX_DELAY);
     strlcpy(ip, g_config.collector_ip, sizeof(ip));
     strlcpy(name, g_config.node_name, sizeof(name));
-    uint16_t port = g_config.collector_port;
-    uint16_t max_kbps = g_config.max_kbps;
+    port = g_config.collector_port;
+    max_kbps = g_config.max_kbps;
+    xSemaphoreGive(g_config_mutex);
     bool valid = true;
     bool updated = false;
 
     if (strstr(body, "\"collector_ip\"")) {
         updated = true;
+        // inet_pton, not inet_addr: inet_addr rejects 255.255.255.255, which is
+        // exactly the broadcast collector address the capture transport relies
+        // on, and it also accepts legacy shorthand such as "10.1".
+        struct in_addr parsed_address;
         valid = json_string_field(body, "collector_ip", ip, sizeof(ip)) &&
-                inet_addr(ip) != INADDR_NONE;
+                inet_pton(AF_INET, ip, &parsed_address) == 1;
     }
     long parsed_port = 0;
     if (valid && strstr(body, "\"collector_port\"")) {
@@ -602,10 +683,9 @@ static esp_err_t config_handler(httpd_req_t *request)
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "config kept in RAM only; NVS write failed: %s", esp_err_to_name(error));
     }
-    (void)mdns_instance_name_set(g_config.node_name);
+    (void)mdns_instance_name_set(name);
     ESP_LOGI(TAG, "config updated; collector %s:%u name %s limit %u KB/s",
-             g_config.collector_ip, g_config.collector_port, g_config.node_name,
-             g_config.max_kbps);
+             ip, port, name, max_kbps);
     return status_handler(request);
 }
 
@@ -676,18 +756,29 @@ static void monitor_task(void *unused)
     int64_t tx_credit_us = esp_timer_get_time();
     uint32_t rate_limited = 0;
 
+    // The capture queue is allocated separately and may fail (it is one large
+    // contiguous block). Draining a NULL queue would assert or crash, so the task
+    // keeps running for telemetry but skips the drain entirely in that case.
+    if (g_packets == NULL) {
+        ESP_LOGW(TAG, "capture queue unavailable; monitor task will not drain frames");
+    }
+
     while (true) {
         struct sockaddr_in destination;
         uint32_t limit_kbps;
+        char node_name[CONFIG_NAME_MAX];
         xSemaphoreTake(g_config_mutex, portMAX_DELAY);
         destination = g_destination;
         limit_kbps = g_config.max_kbps;
+        strlcpy(node_name, g_config.node_name, sizeof(node_name));
         xSemaphoreGive(g_config_mutex);
         begin_capture_datagram();
         size_t capture_used = CAPTURE_HEADER_LEN;
         uint32_t capture_records = 0;
         packet_sample_t sample;
-        for (unsigned drained = 0; drained < CAPTURE_QUEUE_DEPTH; ++drained) {
+        for (unsigned drained = 0;
+             g_packets != NULL && drained < CAPTURE_QUEUE_DEPTH;
+             ++drained) {
             if (xQueueReceive(g_packets, &sample, 0) != pdTRUE) break;
             if (sock >= 0 && sample.capture_length > 0) {
                 size_t record_size = CAPTURE_ENTRY_HEADER_LEN + sample.capture_length;
@@ -746,7 +837,7 @@ static void monitor_task(void *unused)
             char json[1900];
             int used = snprintf(json, sizeof(json),
                 "{\"node\":\"%s\",\"name\":\"%s\",\"type\":\"frames\",\"uptime_ms\":%" PRId64 ",\"channels\":[",
-                g_node_id, g_config.node_name, (now - started) / 1000);
+                g_node_id, node_name, (now - started) / 1000);
             bool first = true;
             for (unsigned channel = 0; channel < BUCKET_COUNT && used > 0 && (size_t)used < sizeof(json); ++channel) {
                 frame_bucket_t *bucket = &g_buckets[channel];
@@ -779,7 +870,7 @@ static void monitor_task(void *unused)
             char json[384];
             int used = snprintf(json, sizeof(json),
                 "{\"node\":\"%s\",\"name\":\"%s\",\"type\":\"status\",\"connected\":%s,\"ip\":\"%s\",\"ap_bssid\":\"%s\",\"channel\":%u,\"uptime_ms\":%" PRId64 "}",
-                g_node_id, g_config.node_name, g_connected ? "true" : "false",
+                g_node_id, node_name, g_connected ? "true" : "false",
                 g_ip, g_bssid, g_channel, (now - started) / 1000);
             if (used > 0 && (size_t)used < sizeof(json)) {
                 if (g_network_enabled) send_json(sock, &destination, json, (size_t)used);

@@ -197,6 +197,69 @@ def node_list(argv: list[str]) -> int:
 
 
 # --------------------------------------------------------------------------
+# self
+# --------------------------------------------------------------------------
+def self_test(argv: list[str]) -> int:
+    """Run the bundled test suites."""
+    import subprocess
+
+    runner = Path(__file__).parent / "tests" / "run_all.py"
+    if not runner.is_file():
+        print(f"test runner missing: {runner}", file=sys.stderr)
+        return 1
+    return subprocess.call([sys.executable, str(runner), *argv])
+
+
+def self_doctor(argv: list[str]) -> int:
+    """Check that the environment can run each layer."""
+    parser = argparse.ArgumentParser(
+        prog="wimon self doctor",
+        description="Report the state of the interpreter, capture directory, "
+                    "decoder core and telemetry file.",
+    )
+    parser.add_argument("--capture-dir", type=Path, default=Path("captures"))
+    parser.add_argument("--telemetry-file", type=Path, default=Path("telemetry.jsonl"))
+    args = parser.parse_args(argv)
+
+    problems = 0
+    print(f"python            {sys.version.split()[0]}  ({sys.executable})")
+
+    try:
+        import pcap_dump
+
+        core = Path(__file__).parent / "pcap_dump_core.pyc"
+        print(f"decoder core      ok  {core.name} ({core.stat().st_size} bytes)")
+        summary, _ = pcap_dump.decode_frame(
+            b"\x00\x00\x08\x00\x08\x00\x00\x00" + bytes(24)
+        )
+        print(f"decoder smoke     {str(summary)[:60]}")
+    except Exception as error:
+        problems += 1
+        print(f"decoder core      FAIL {type(error).__name__}: {error}")
+
+    if args.capture_dir.is_dir():
+        files = sorted(args.capture_dir.glob("*.pcap"))
+        total = sum(path.stat().st_size for path in files)
+        print(f"capture dir       ok  {len(files)} file(s), {total / 1_048_576:.1f} MiB")
+    else:
+        print(f"capture dir       absent ({args.capture_dir})")
+
+    if args.telemetry_file.is_file():
+        lines = sum(1 for _ in args.telemetry_file.open(encoding="utf-8", errors="replace"))
+        print(f"telemetry file    ok  {lines} line(s)")
+    else:
+        print(f"telemetry file    absent ({args.telemetry_file})")
+
+    try:
+        import scapy  # noqa: F401
+        print("scapy             ok  live interface capture available")
+    except ImportError:
+        print("scapy             absent (only needed for --interface)")
+
+    return 1 if problems else 0
+
+
+# --------------------------------------------------------------------------
 # dispatch
 # --------------------------------------------------------------------------
 VERBS = {
@@ -216,12 +279,17 @@ VERBS = {
         "update": node_update,
         "list": node_list,
     },
+    "self": {
+        "test": self_test,
+        "doctor": self_doctor,
+    },
 }
 
 NOUN_HELP = {
     "capture": "receive frames and telemetry from nodes",
     "frames": "inspect captured frames",
     "node": "talk to a node over HTTP",
+    "self": "check the tooling itself",
 }
 
 VERB_HELP = {
@@ -235,6 +303,8 @@ VERB_HELP = {
     ("node", "config"): "read or change /config on a node",
     ("node", "update"): "push a firmware image over HTTP",
     ("node", "list"): "list nodes known from telemetry",
+    ("self", "test"): "run the bundled test suites",
+    ("self", "doctor"): "check interpreter, decoder core, captures and telemetry",
 }
 
 
