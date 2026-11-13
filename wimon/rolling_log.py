@@ -29,14 +29,14 @@ def _drain_stderr(pipe, logger: logging.Logger) -> None:
     pipe.close()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log-file", required=True, type=Path)
     parser.add_argument("--error-file", required=True, type=Path)
     parser.add_argument("--max-bytes", type=int, default=1_048_576)
     parser.add_argument("--backups", type=int, default=2)
     parser.add_argument("command", nargs=argparse.REMAINDER)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if args.max_bytes < 1024:
         parser.error("--max-bytes must be at least 1024")

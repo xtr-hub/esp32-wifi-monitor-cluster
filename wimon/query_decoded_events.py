@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("database", type=Path, help="SQLite file produced by the live decoder")
     parser.add_argument("--category", help="filter by broad category, such as discovery or iot")
@@ -14,7 +14,7 @@ def main() -> int:
     parser.add_argument("--node", help="filter by node label, such as node-01")
     parser.add_argument("--limit", type=int, default=20, help="number of recent events to show (default: 20)")
     parser.add_argument("--show-private", action="store_true", help="allow displaying database rows captured with --show-private")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.limit < 1:
         parser.error("--limit must be at least 1")

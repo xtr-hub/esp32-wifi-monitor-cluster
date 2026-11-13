@@ -185,7 +185,7 @@ def build_sources(args) -> list[tuple[str, object]]:
     return sources
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,

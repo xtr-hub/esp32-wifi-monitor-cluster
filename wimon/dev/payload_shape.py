@@ -68,14 +68,14 @@ def json_shape(payload: bytes):
     return "json scalar"
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("captures", type=Path)
     ap.add_argument("--ports", required=True, help="comma separated udp ports")
     ap.add_argument("--files", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--samples", type=int, default=3)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     wanted = {int(p) for p in args.ports.split(",")}
     payloads: dict[int, list[bytes]] = collections.defaultdict(list)

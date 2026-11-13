@@ -47,4 +47,4 @@ desktop.ini
 
 # The retained decoder core is a build artifact of the upstream decoder, but it
 # is the only copy of the bytecode parser and pcap_dump.py loads it at runtime.
-!tools/pcap_dump_core.pyc
+!wimon/pcap_dump_core.pyc

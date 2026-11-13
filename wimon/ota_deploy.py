@@ -43,7 +43,7 @@ def latest_node_ips(telemetry: Path) -> dict[str, dict[str, str]]:
     return nodes
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("firmware", type=Path, nargs="?", help="application .bin file for the target chip")
     parser.add_argument("ips", nargs="*", help="node IPv4 addresses")
@@ -54,7 +54,7 @@ def main() -> int:
                         help="collector JSON Lines file used by --node/--list (default: telemetry.jsonl)")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--config", type=Path, default=Path("sdkconfig"), help="local sdkconfig holding the OTA token")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     nodes: dict[str, dict[str, str]] = {}
     if args.list or args.node:

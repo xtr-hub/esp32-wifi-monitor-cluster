@@ -117,13 +117,13 @@ def parse_ports(proto: int, body: bytes):
     return None
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("captures", type=Path)
     ap.add_argument("--files", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0, help="records per file, 0 = all")
     ap.add_argument("--top", type=int, default=40)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     paths = sorted(args.captures.glob("*_aa-bb-cc-*.pcap"),
                    key=lambda p: p.stat().st_mtime, reverse=True)[:args.files]

@@ -70,13 +70,13 @@ def write_capture_offset(capture) -> None:
         CHECKPOINT_WARNING_EMITTED = True
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0", help="address to bind (default: all interfaces)")
     parser.add_argument("--port", type=int, default=9000, help="UDP port to listen on")
     parser.add_argument("--output", help="append received reports as JSON Lines to this file")
     parser.add_argument("--capture-dir", default="captures", help="directory for per-node PCAP files")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     output = open(args.output, "a", encoding="utf-8") if args.output else None
     captures = {}
