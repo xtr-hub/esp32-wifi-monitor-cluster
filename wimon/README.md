@@ -5,6 +5,10 @@ shape so the surface is predictable:
 
 ```
 wimon capture start      receive frames and telemetry from nodes
+wimon capture start -b   same, detached from this terminal
+wimon capture stop       stop the background collector
+wimon capture status     is the background collector running?
+wimon capture log        show the background collector's log
 wimon capture nodes      list nodes seen by the collector
 wimon frames show        live view of decoded frames
 wimon frames decode      decode a finished capture and exit
@@ -99,16 +103,53 @@ those two files into another project and point them at any Radiotap or raw
 
 ```powershell
 # receive frames and telemetry, writing one PCAP per node
-.\wimon.cmd capture start --output telemetry.jsonl --capture-dir captures
+.\wimon.cmd capture start
+
+# same, but detached: a background collector you can leave running
+.\wimon.cmd capture start --background
+
+# is it alive, and what did it print?
+.\wimon.cmd capture status
+.\wimon.cmd capture status --log 10
+.\wimon.cmd capture log -f
+
+# stop it
+.\wimon.cmd capture stop
 
 # what nodes have reported, newest state per node
 .\wimon.cmd capture nodes
 .\wimon.cmd capture nodes --json
 ```
 
-`capture start` binds UDP 9000 by default and writes each node's frames to
+`capture start` binds UDP 9000 and writes each node's frames to
 `<captures>/<session>_<mac>.pcap` with a `.offset` checkpoint. `--host`,
 `--port`, `--output` and `--capture-dir` control it.
+
+### Headless mode
+
+`--background` starts the collector detached from the terminal, which is what you
+want on a machine that keeps collecting while you do other work:
+
+- the child is started with `DETACHED_PROCESS`, so closing the terminal does not
+  stop it and Ctrl+C in the launching shell does not reach it;
+- its output goes to `.wimon/capture.log`;
+- the pid and the original arguments are recorded in `.wimon/capture.pid` and
+  `.wimon/capture.json`, which is how `status`, `log` and `stop` find it;
+- a second `capture start --background` is refused while one is running.
+
+A stale pid file never causes a wrong kill: before signalling, the recorded
+command line is compared against the process, so a pid reused after a reboot is
+ignored rather than terminated.
+
+`.wimon/` is git-ignored. `--run-dir` relocates it if you want several
+collectors on one machine.
+
+### Running without a terminal at all
+
+For a machine that should collect on boot, either register `wimon capture start
+--background` as a logon task, or run the foreground command under a service
+manager. The background form is deliberately not a Windows service: it holds no
+elevated privileges and writes only inside the repository.
 
 ## frames
 
@@ -263,7 +304,7 @@ database can be shared without leaking the unmasked values it may contain.
 
 ## Tests
 
-Four suites, 73 tests, no test framework required:
+Six suites, 82 tests, no test framework required:
 
 ```powershell
 py wimon\tests\run_all.py         # everything
@@ -278,6 +319,7 @@ py wimon\cli.py self doctor       # environment check
 | `test_privacy.py` | each matcher's identifying field is hidden by default and revealed by `--show-private`; TXT semicolon/parenthesis cases; reverse DNS; SoftBus shapes |
 | `test_decoder.py` | every prefix of a real frame decodes without raising; short matcher payloads; deeply nested JSON; 300 random port/length combinations; both ROAM directions; declared-length checks; baseline corpus "zero unclassified"; newest capture "zero undecodable, zero address literals"; glob expansion |
 | `test_events.py` | database layer and every `events` command: filters, recent/stream ordering, histogram totals, ring vs append, CSV/JSONL export, SQL guard rejecting writes, `convert` round-trip, private rows hidden by default |
+| `test_daemon.py` | headless control: stale pid ignored, an unrelated pid never killed, double start refused, stop when already stopped, log tail, recorded state |
 | `test_cli.py` | noun/verb dispatch, argument forwarding, error codes, telemetry merge, node client against a local HTTP server, token handling |
 
 The capture-dependent tests skip themselves when `captures/` has no PCAP, so the

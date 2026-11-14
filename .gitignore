@@ -25,6 +25,9 @@ decoded-*.txt
 *.sqlite-wal
 *.sqlite-shm
 
+# --- Runtime state from background capture ---
+.wimon/
+
 # --- Logs ---
 *.log
 *.err.log

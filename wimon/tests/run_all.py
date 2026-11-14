@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SUITES = ["frames", "privacy", "decoder", "events", "cli"]
+SUITES = ["frames", "privacy", "decoder", "events", "daemon", "cli"]
 
 
 def run_suite(name: str) -> tuple[int, int, list[str]]:

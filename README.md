@@ -20,6 +20,7 @@ Starter firmware and a small UDP collector for an ESP32-C5 monitor cluster (four
 │   ├── frames.py             Frame source layer: PCAP, growing PCAP, live iface
 │   ├── watch.py              Live viewer: filter, format, statistics
 │   ├── events.py             Read-only queries over the decoded-event database
+│   ├── daemon.py             Detach/stop/status for headless capture
 │   ├── node.py               HTTP control: /status and /config
 │   ├── pcap_dump.py          Layer-2..7 decoder with privacy masking
 │   ├── pcap_dump_core.pyc    Retained core bytecode parser loaded by pcap_dump.py
@@ -63,6 +64,10 @@ has a fixed role; every layer above it can be replaced or removed independently.
 
 ```
 wimon capture start      receive frames and telemetry from nodes
+wimon capture start -b   same, detached (headless) so the terminal stays free
+wimon capture stop       stop the background collector
+wimon capture status     is the background collector running?
+wimon capture log        show the background collector's log
 wimon capture nodes      list nodes seen by the collector
 wimon frames show        live view of decoded frames
 wimon frames decode      decode a finished capture and exit
@@ -79,25 +84,39 @@ level. See `wimon/README.md` for the full option tables.
 
 ## Live view
 
-`wimon frames show` is the command to use while the cluster runs. It follows
-every node PCAP from the last complete record, decodes each frame, and prints one
-compact line per frame.
+Two ways to run it, depending on whether you want to keep the terminal.
 
 ```powershell
-# follow all node captures, hiding the usual discovery noise
-.\wimon.cmd frames show captures/*.pcap --exclude mDNS,ARP,LLMNR --stats 5
+# headless: collector runs in the background, terminal stays free
+.\wimon.cmd capture start --background
+.\wimon.cmd capture status
+.\wimon.cmd capture log -f          # watch its output
+.\wimon.cmd capture stop
+```
 
+```powershell
+# attached: collector in one terminal, viewer in another
+.\wimon.cmd capture start           # terminal 1
+.\wimon.cmd frames show captures/*.pcap --exclude mDNS,ARP,LLMNR --stats 5   # terminal 2
+```
+
+`wimon frames show` follows every node PCAP from the last complete record,
+decodes each frame, and prints one compact line per frame. `capture start`
+receives the data; `frames show` only reads files, so it shows nothing unless a
+collector is writing.
+
+```powershell
 # only one protocol family
-py wimon/watch.py captures/*.pcap --ports 4039,10004
+.\wimon.cmd frames show captures/*.pcap --ports 4039,10004
 
 # one node, every 50th frame, truncated lines
-py wimon/watch.py captures/*_aa-bb-cc-dd-ee-ff.pcap --every 50 --width 120
+.\wimon.cmd frames show captures/*_aa-bb-cc-dd-ee-ff.pcap --every 50 --width 120
 
 # read a finished capture once
-py wimon/watch.py captures/<file>.pcap --static
+.\wimon.cmd frames show captures/<file>.pcap --static
 
 # live interface instead of a PCAP
-py wimon/watch.py --interface wlan0mon
+.\wimon.cmd frames show --interface wlan0mon
 ```
 
 | Option | Meaning |

@@ -4,6 +4,10 @@
 Commands follow a `noun verb` shape so the surface stays predictable:
 
     wimon capture start          receive frames and telemetry from nodes
+    wimon capture start -b       same, detached from this terminal
+    wimon capture stop           stop the background collector
+    wimon capture status         is the background collector running?
+    wimon capture log            show the background collector's log
     wimon capture nodes          list nodes seen by the collector
     wimon frames show            live view of decoded frames
     wimon frames decode          decode a finished capture and exit
@@ -56,9 +60,144 @@ def _no_such(noun: str, verb: str) -> int:
 # capture
 # --------------------------------------------------------------------------
 def capture_start(argv: list[str]) -> int:
+    """Start the collector, optionally detached from this terminal."""
     import collector
+    import daemon
 
-    return collector.main(argv)
+    parser = argparse.ArgumentParser(
+        prog="wimon capture start",
+        description="Receive UDP frames and telemetry, writing one PCAP per node.",
+    )
+    parser.add_argument("--background", "-b", action="store_true",
+                        help="run detached in the background; use 'capture stop' to end it")
+    parser.add_argument("--foreground", action="store_true",
+                        help="force foreground (this is what --background launches)")
+    parser.add_argument("--run-dir", type=Path, default=daemon.DEFAULT_RUN_DIR,
+                        help="where the pid file and log live (default: .wimon)")
+    parser.add_argument("--host", default=None, help="address to bind")
+    parser.add_argument("--port", type=int, default=None, help="UDP port to listen on")
+    parser.add_argument("--output", default=None, help="telemetry JSON Lines file")
+    parser.add_argument("--capture-dir", default=None, help="directory for per-node PCAPs")
+    args, rest = parser.parse_known_args(argv)
+
+    # Everything the collector itself understands, rebuilt from what was given so
+    # defaults stay in one place (collector.py).
+    collector_args: list[str] = []
+    if args.host is not None:
+        collector_args += ["--host", args.host]
+    if args.port is not None:
+        collector_args += ["--port", str(args.port)]
+    if args.output is not None:
+        collector_args += ["--output", args.output]
+    if args.capture_dir is not None:
+        collector_args += ["--capture-dir", args.capture_dir]
+    collector_args += rest
+
+    if args.background:
+        started, message = daemon.start_detached(
+            Path(__file__).resolve(), collector_args, args.run_dir
+        )
+        print(message)
+        return 0 if started else 1
+
+    return collector.main(collector_args)
+
+
+def capture_stop(argv: list[str]) -> int:
+    import daemon
+
+    parser = argparse.ArgumentParser(
+        prog="wimon capture stop",
+        description="Stop a collector started with --background.",
+    )
+    parser.add_argument("--run-dir", type=Path, default=daemon.DEFAULT_RUN_DIR)
+    args = parser.parse_args(argv)
+    stopped, message = daemon.stop(args.run_dir)
+    print(message)
+    return 0 if stopped else 1
+
+
+def capture_status(argv: list[str]) -> int:
+    import daemon
+
+    parser = argparse.ArgumentParser(
+        prog="wimon capture status",
+        description="Report whether a background collector is running.",
+    )
+    parser.add_argument("--run-dir", type=Path, default=daemon.DEFAULT_RUN_DIR)
+    parser.add_argument("--log", type=int, default=0,
+                        help="also print this many trailing log lines")
+    args = parser.parse_args(argv)
+
+    running, pid = daemon.is_running(args.run_dir)
+    if not running:
+        print("capture: not running")
+        if pid is not None:
+            print(f"  (stale pid {pid} ignored)")
+        return 1
+
+    state = daemon.read_state(args.run_dir)
+    print(f"capture: running (pid {pid})")
+    if state:
+        print(f"  started  {state.started_at}")
+        print(f"  log      {state.log}")
+        if state.argv:
+            print(f"  args     {' '.join(state.argv)}")
+    if args.log:
+        tail = daemon.log_tail(args.run_dir, args.log)
+        if tail:
+            print()
+            print(tail)
+    return 0
+
+
+def capture_log(argv: list[str]) -> int:
+    """Print the detached collector's log."""
+    import daemon
+
+    parser = argparse.ArgumentParser(
+        prog="wimon capture log",
+        description="Show the background collector's log.",
+    )
+    parser.add_argument("--run-dir", type=Path, default=daemon.DEFAULT_RUN_DIR)
+    parser.add_argument("--lines", "-n", type=int, default=30)
+    parser.add_argument("--follow", "-f", action="store_true",
+                        help="keep printing new lines until Ctrl+C")
+    args = parser.parse_args(argv)
+
+    path = args.run_dir / "capture.log"
+    if not path.is_file():
+        print(f"no log at {path}", file=sys.stderr)
+        return 1
+
+    text = daemon.log_tail(args.run_dir, args.lines)
+    if text:
+        print(text)
+
+    if not args.follow:
+        return 0
+
+    try:
+        position = path.stat().st_size
+        while True:
+            time.sleep(0.5)
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size < position:
+                position = 0        # log was truncated by a restart
+            if size == position:
+                continue
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(position)
+                chunk = handle.read()
+                position = handle.tell()
+            if chunk:
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+    except KeyboardInterrupt:
+        return 0
 
 
 def capture_nodes(argv: list[str]) -> int:
@@ -642,6 +781,9 @@ def self_doctor(argv: list[str]) -> int:
 VERBS = {
     "capture": {
         "start": capture_start,
+        "stop": capture_stop,
+        "status": capture_status,
+        "log": capture_log,
         "nodes": capture_nodes,
     },
     "frames": {
@@ -681,6 +823,9 @@ NOUN_HELP = {
 
 VERB_HELP = {
     ("capture", "start"): "receive UDP frames and telemetry, writing PCAP per node",
+    ("capture", "stop"): "stop a background collector",
+    ("capture", "status"): "is a background collector running?",
+    ("capture", "log"): "show the background collector's log",
     ("capture", "nodes"): "list nodes reported through telemetry",
     ("frames", "show"): "live view of decoded frames (follows growing PCAPs)",
     ("frames", "decode"): "decode a finished capture to stdout",
