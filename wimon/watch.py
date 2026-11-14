@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import glob
 import re
 import sys
 import time
@@ -150,6 +151,49 @@ def pick_ports(summary: str) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
+def expand_paths(patterns: list[str]) -> list[Path]:
+    """Resolve file paths and glob patterns into a sorted file list.
+
+    Windows is the reason this exists: cmd.exe (and therefore the .cmd launcher)
+    does not expand wildcards, so `captures/*.pcap` arrives as a literal string.
+    Shells on Linux and macOS expand before the program runs, so this is a no-op
+    there. A pattern that matches nothing is reported instead of being silently
+    dropped.
+    """
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in patterns:
+        candidate = Path(pattern)
+        if candidate.is_file():
+            key = candidate.resolve()
+            if key not in seen:
+                seen.add(key)
+                resolved.append(candidate)
+            continue
+        # Treat the argument as a glob: relative to the current directory first,
+        # then by absolute pattern. Path().glob() rejects absolute patterns, so it
+        # is only used when the argument is relative.
+        matches = sorted(glob.glob(pattern, recursive=True))
+        if not matches and not Path(pattern).is_absolute():
+            try:
+                matches = sorted(str(p) for p in Path().glob(pattern))
+            except (NotImplementedError, ValueError):
+                matches = []
+        if not matches:
+            print(f"no files match: {pattern}", file=sys.stderr)
+            continue
+        for match in matches:
+            path = Path(match)
+            if not path.is_file():
+                continue
+            key = path.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved.append(path)
+    return resolved
+
+
 def build_sources(args) -> list[tuple[str, object]]:
     """Return (label, reader) pairs, where reader has read_new() or is iterable."""
     if args.interface:
@@ -169,12 +213,30 @@ def build_sources(args) -> list[tuple[str, object]]:
     if not args.paths:
         raise SystemExit("give one or more PCAP paths, or --interface")
 
+    paths = expand_paths(args.paths)
+    if not paths:
+        raise SystemExit(
+            "no readable PCAP files; check the path or start 'capture start' first"
+        )
+
+    if args.latest:
+        # Collector filenames are <session>_<mac>.pcap. Keep only the newest
+        # session so following does not open every historical capture.
+        def session_of(path: Path) -> str:
+            stem = path.stem
+            return stem.split("_", 1)[0] if "_" in stem else stem
+
+        newest = max(session_of(path) for path in paths)
+        kept = [path for path in paths if session_of(path) == newest]
+        if kept:
+            print(
+                f"--latest: session {newest} ({len(kept)} file(s) of {len(paths)})",
+                flush=True,
+            )
+            paths = kept
+
     sources: list[tuple[str, object]] = []
-    for raw in args.paths:
-        path = Path(raw)
-        if not path.is_file():
-            print(f"skip (not a file): {path}", file=sys.stderr)
-            continue
+    for path in paths:
         label = short_label(path)
         if args.static:
             sources.append((label, list(read_records(path))))
@@ -190,10 +252,14 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("paths", nargs="*", type=Path,
-                        help="PCAP files to read; growing files are followed")
+    parser.add_argument("paths", nargs="*",
+                        help="PCAP files or globs such as captures/*.pcap; "
+                             "growing files are followed")
     parser.add_argument("--interface", "-i", default=None,
                         help="capture live from a monitor-mode interface instead")
+    parser.add_argument("--latest", action="store_true",
+                        help="only the newest capture session (one file per node); "
+                             "use this when following live data")
     parser.add_argument("--static", action="store_true",
                         help="read the given PCAPs once instead of following them")
     parser.add_argument("--from-start", action="store_true",

@@ -10,6 +10,13 @@ wimon frames show        live view of decoded frames
 wimon frames decode      decode a finished capture and exit
 wimon frames ports       per-port datagram counts in a capture
 wimon frames shape       structural analysis of one port's payloads
+wimon events info        describe a decoded-event database
+wimon events summary     event counts by category and protocol
+wimon events timeline    event counts over time
+wimon events show        print individual events
+wimon events export      export events as CSV or JSON lines
+wimon events query       run one read-only SQL query
+wimon events convert     decode PCAP files into a database
 wimon node status        read /status from a node
 wimon node config        read or change /config on a node
 wimon node update        push a firmware image over HTTP
@@ -46,6 +53,7 @@ ESP32 node  ──UDP──▶  collector.py  ──▶  captures/*.pcap   (raw 
 | Source | `frames.py` | Turn a PCAP file, a growing PCAP, or a live monitor interface into frames. Knows nothing about ESP32. |
 | Decode | `pcap_dump.py` (+ `pcap_dump_core.pyc`) | Frame bytes → one-line summary. Privacy masking lives here. |
 | View | `cli.py`, `watch.py` | Dispatch, filter, format, print. No protocol logic. |
+| Store | `events.py` | Read-only queries over the decoded-event SQLite database. |
 | Control | `node.py`, `ota_deploy.py` | Talk to a node's HTTP endpoints. |
 
 ### How the live view works
@@ -181,9 +189,80 @@ modifying anything.
 A node's `/config` rejects an invalid `collector_ip`, a port outside 1–65535, or
 `max_kbps` outside 0–10000, and changes nothing when any field is invalid.
 
+## Storage: two layers, not two alternatives
+
+The project keeps two kinds of stored data, and they answer different questions.
+
+| | PCAP (`captures/*.pcap`) | SQLite (`*.sqlite`) |
+|---|---|---|
+| Written by | `capture start` | `pcap_dump --sqlite`, `events convert` |
+| Holds | every received frame, byte-for-byte | one sanitized summary row per frame |
+| Size | gigabytes | megabytes (a 9k-frame capture is ~5 MB) |
+| Answers | "show me the bytes", Wireshark, re-decoding | "how much mDNS today", "which node saw 4039" |
+| Privacy | raw, contains everything | masked at write time, `show_private` flag per row |
+
+The database is an **index over the PCAPs**, not a replacement. Raw bytes stay in
+the PCAPs; the database records what the decoder decided so you can aggregate and
+search without re-parsing gigabytes.
+
+### Building a database
+
+```powershell
+# index the newest session's captures
+.\wimon.cmd events convert captures/*.pcap --latest --database lab.sqlite
+
+# index everything, keeping only the last 50,000 events (bounded disk use)
+.\wimon.cmd events convert "captures/*.pcap" --database lab.sqlite --ring-capacity 50000
+
+# label the source so several captures stay distinguishable
+.\wimon.cmd events convert captures/*.pcap --database lab.sqlite --source-label node-a50c
+```
+
+`--ring-capacity` switches the table to a fixed-slot ring: the file stops growing
+and always holds the most recent N events. Without it the table grows forever.
+
+### Querying
+
+```powershell
+# what is in it
+.\wimon.cmd events info lab.sqlite
+
+# what protocols, how much of each
+.\wimon.cmd events summary lab.sqlite
+.\wimon.cmd events summary lab.sqlite --by category
+.\wimon.cmd events summary lab.sqlite --protocol mDNS --node a50c
+
+# when did it happen
+.\wimon.cmd events timeline lab.sqlite --bucket 60
+
+# individual events
+.\wimon.cmd events show lab.sqlite --protocol UDP/4039 --limit 20
+.\wimon.cmd events show lab.sqlite --json --limit 5
+.\wimon.cmd events show lab.sqlite --fields captured_at,protocol,rssi_dbm
+
+# hands-on SQL, read-only
+.\wimon.cmd events query lab.sqlite "SELECT channel, COUNT(*) FROM decoded_events GROUP BY channel"
+
+# export for a spreadsheet or another tool
+.\wimon.cmd events export lab.sqlite --format csv --out events.csv
+.\wimon.cmd events export lab.sqlite --format jsonl --protocol CoAP
+```
+
+Every query command accepts the same filters: `--category`, `--protocol`,
+`--node`, `--channel`, `--since`, `--until`, `--search`, and `--show-private`.
+
+`events query` only accepts statements starting with `SELECT` or `WITH`. The
+connection is opened read-only, so a mistake cannot modify the file.
+
+### Privacy in the database
+
+Rows written during a `--show-private` run are marked `show_private = 1` and are
+excluded from every query unless `--show-private` is passed. This means a
+database can be shared without leaking the unmasked values it may contain.
+
 ## Tests
 
-Four suites, 53 tests, no test framework required:
+Four suites, 73 tests, no test framework required:
 
 ```powershell
 py wimon\tests\run_all.py         # everything
@@ -196,7 +275,8 @@ py wimon\cli.py self doctor       # environment check
 |---|---|
 | `test_frames.py` | tail reader: partial records withheld, resume at a boundary, no loss while a file grows, link types 127/105, bad files rejected |
 | `test_privacy.py` | each matcher's identifying field is hidden by default and revealed by `--show-private`; TXT semicolon/parenthesis cases; reverse DNS; SoftBus shapes |
-| `test_decoder.py` | every prefix of a real frame decodes without raising; short matcher payloads; deeply nested JSON; 300 random port/length combinations; both ROAM directions; declared-length checks; capture-level "zero unclassified, zero address literals" |
+| `test_decoder.py` | every prefix of a real frame decodes without raising; short matcher payloads; deeply nested JSON; 300 random port/length combinations; both ROAM directions; declared-length checks; baseline corpus "zero unclassified"; newest capture "zero undecodable, zero address literals"; glob expansion |
+| `test_events.py` | database layer and every `events` command: filters, recent/stream ordering, histogram totals, ring vs append, CSV/JSONL export, SQL guard rejecting writes, `convert` round-trip, private rows hidden by default |
 | `test_cli.py` | noun/verb dispatch, argument forwarding, error codes, telemetry merge, node client against a local HTTP server, token handling |
 
 The capture-dependent tests skip themselves when `captures/` has no PCAP, so the

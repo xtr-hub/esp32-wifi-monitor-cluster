@@ -19,6 +19,7 @@ Starter firmware and a small UDP collector for an ESP32-C5 monitor cluster (four
 │   ├── collector.py          UDP 9000 receiver → per-node PCAP + telemetry.jsonl
 │   ├── frames.py             Frame source layer: PCAP, growing PCAP, live iface
 │   ├── watch.py              Live viewer: filter, format, statistics
+│   ├── events.py             Read-only queries over the decoded-event database
 │   ├── node.py               HTTP control: /status and /config
 │   ├── pcap_dump.py          Layer-2..7 decoder with privacy masking
 │   ├── pcap_dump_core.pyc    Retained core bytecode parser loaded by pcap_dump.py
@@ -42,7 +43,14 @@ ESP32 node ──UDP──▶ collector.py ──▶ captures/*.pcap
                                           │ frames.py
                                           │ pcap_dump.py
                                           │ cli.py  (noun verb ...)
+                                          └──▶ *.sqlite  (events.py queries)
 ```
+
+Two storage layers answer different questions. `captures/*.pcap` keeps every
+frame byte-for-byte (gigabytes, for Wireshark or re-decoding); `*.sqlite` keeps
+one sanitized summary row per frame (megabytes, for aggregation and search).
+Build the database with `wimon events convert` and query it with the
+`wimon events` commands.
 
 Because `frames.py` and `pcap_dump.py` know nothing about ESP32 or this
 repository's layout, they also work as a standalone 802.11 analyser against any
