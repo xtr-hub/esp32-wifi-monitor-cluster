@@ -219,21 +219,32 @@ def build_sources(args) -> list[tuple[str, object]]:
             "no readable PCAP files; check the path or start 'capture start' first"
         )
 
-    if args.latest:
-        # Collector filenames are <session>_<mac>.pcap. Keep only the newest
-        # session so following does not open every historical capture.
+    if not args.all_sessions:
+        # Default to the newest session per node. A glob over captures/*.pcap
+        # matches every historical session, and following all of them yields one
+        # idle reader per old file. Picking per node keeps a node that reported
+        # later than the others, while collapsing its own history.
         def session_of(path: Path) -> str:
             stem = path.stem
             return stem.split("_", 1)[0] if "_" in stem else stem
 
-        newest = max(session_of(path) for path in paths)
-        kept = [path for path in paths if session_of(path) == newest]
-        if kept:
+        newest_by_node: dict[str, str] = {}
+        for path in paths:
+            node = short_label(path)
+            session = session_of(path)
+            if node not in newest_by_node or session > newest_by_node[node]:
+                newest_by_node[node] = session
+        kept = [
+            path for path in paths
+            if session_of(path) == newest_by_node[short_label(path)]
+        ]
+        if len(kept) < len(paths):
             print(
-                f"--latest: session {newest} ({len(kept)} file(s) of {len(paths)})",
+                f"newest session per node: {len(kept)} of {len(paths)} file(s) "
+                "(use --all-sessions for the rest)",
                 flush=True,
             )
-            paths = kept
+        paths = kept
 
     sources: list[tuple[str, object]] = []
     for path in paths:
@@ -257,9 +268,9 @@ def main(argv: list[str] | None = None) -> int:
                              "growing files are followed")
     parser.add_argument("--interface", "-i", default=None,
                         help="capture live from a monitor-mode interface instead")
-    parser.add_argument("--latest", action="store_true",
-                        help="only the newest capture session (one file per node); "
-                             "use this when following live data")
+    parser.add_argument("--all-sessions", action="store_true",
+                        help="follow every matched file, including older sessions; "
+                             "by default only the newest session per node is followed")
     parser.add_argument("--static", action="store_true",
                         help="read the given PCAPs once instead of following them")
     parser.add_argument("--from-start", action="store_true",
@@ -312,9 +323,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if not args.interface:
-        print(f"watching {len(sources)} source(s)")
-        for label, _reader in sources:
-            print(f"  {label}")
+        # Summarise instead of listing every file: a glob can resolve to dozens
+        # of files per node, and one identical line each is noise.
+        nodes = sorted({label for label, _reader in sources})
+        print(f"watching {len(sources)} file(s), {len(nodes)} node(s)")
+        if len(nodes) <= 8:
+            print(f"  nodes: {', '.join(nodes)}")
+        else:
+            print(f"  nodes: {', '.join(nodes[:8])}, ... ({len(nodes)} total)")
         if port_filter:
             print(f"  ports: {sorted(port_filter)}")
         if app_filter:

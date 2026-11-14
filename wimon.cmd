@@ -7,7 +7,10 @@ rem where the launcher was invoked from.
 rem
 rem Uses the Python launcher (py) because "python" may resolve to the Windows
 rem Store stub, which does not run scripts.
-rem %~dp0 ends with a backslash and points at this file's directory.
+rem
+rem Ctrl+C: calling py directly (not through cmd /c) lets the console deliver the
+rem interrupt to Python, so an interactive view stops without the extra
+rem "Terminate batch job (Y/N)?" prompt.
 setlocal
 set "WIMON_HOME=%~dp0"
 cd /d "%WIMON_HOME%"

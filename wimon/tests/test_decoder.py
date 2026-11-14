@@ -28,8 +28,31 @@ import pcap_dump as pd  # noqa: E402
 from frames import PcapTail, read_records  # noqa: E402
 
 CAPTURES = ROOT / "captures"
-IPV4 = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
+IPV4 = re.compile(r"(?<![\d.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?![\d.])")
 MAC = re.compile(r"\b[0-9a-f]{2}(:[0-9a-f]{2}){5}\b", re.I)
+
+
+def address_literals(text: str) -> list[str]:
+    """Return IPv4/MAC literals that are not part of a longer dotted token.
+
+    SNMP object identifiers such as 1.3.6.1.2.1.1.2.0 contain four-or-more dotted
+    numbers, so a naive four-group regex matches them and reports a false leak.
+    The lookarounds plus the explicit length check keep OIDs out.
+    """
+    found: list[str] = []
+    for match in IPV4.finditer(text):
+        literal = match.group(0)
+        # Reject anything adjacent to another dotted number (an OID fragment).
+        start, end = match.span()
+        before = text[start - 1] if start else ""
+        after = text[end] if end < len(text) else ""
+        if before == "." or after == ".":
+            continue
+        if before.isdigit() or after.isdigit():
+            continue
+        found.append(literal)
+    found.extend(match.group(0) for match in MAC.finditer(text))
+    return found
 
 
 def radiotap_wrap(frame: bytes) -> bytes:
@@ -271,7 +294,7 @@ def test_newest_capture_decodes_without_errors() -> None:
         if "undecodable frame" in summary:
             undecodable += 1
         body = summary.split("802.11", 1)[-1]
-        if IPV4.search(body) or MAC.search(body):
+        if address_literals(body):
             leaks += 1
     assert total > 0, "capture decoded no frames"
     assert undecodable == 0, f"{undecodable} frames raised inside the decoder"

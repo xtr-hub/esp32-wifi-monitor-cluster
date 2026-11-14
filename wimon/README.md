@@ -137,7 +137,8 @@ those two files into another project and point them at any Radiotap or raw
 
 | Option | Meaning |
 |---|---|
-| `paths...` | PCAP files. Growing files are followed automatically from the last complete record, so nothing is replayed. |
+| `paths...` | PCAP files or globs such as `captures/*.pcap`. Growing files are followed from the last complete record, so nothing is replayed. |
+| `--all-sessions` | Follow every matched file. By default only the newest session per node is followed, because a glob over `captures/` matches every historical session. |
 | `--interface`, `-i` | Capture from a monitor-mode interface instead of files (needs scapy). |
 | `--static` | Read the given files once and exit instead of following. |
 | `--from-start` | When following, print the existing records first. |

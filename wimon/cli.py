@@ -497,21 +497,36 @@ def events_convert(argv: list[str]) -> int:
                         help="keep only this many recent events (bounded storage)")
     parser.add_argument("--source-label", default=None,
                         help="node label for these events (default: capture-<hash>)")
-    parser.add_argument("--latest", action="store_true",
-                        help="only the newest capture session")
+    parser.add_argument("--all-sessions", action="store_true",
+                        help="index every matched file; by default only the newest "
+                             "session per node is indexed")
     args = parser.parse_args(argv)
 
     import watch
 
     paths = watch.expand_paths(args.paths)
-    if args.latest and paths:
+    if not args.all_sessions and paths:
         def session_of(path: Path) -> str:
             stem = path.stem
             return stem.split("_", 1)[0] if "_" in stem else stem
 
-        newest = max(session_of(path) for path in paths)
-        paths = [path for path in paths if session_of(path) == newest]
-        print(f"--latest: session {newest} ({len(paths)} file(s))", flush=True)
+        newest_by_node: dict[str, str] = {}
+        for path in paths:
+            node = watch.short_label(path)
+            session = session_of(path)
+            if node not in newest_by_node or session > newest_by_node[node]:
+                newest_by_node[node] = session
+        kept = [
+            path for path in paths
+            if session_of(path) == newest_by_node[watch.short_label(path)]
+        ]
+        if len(kept) < len(paths):
+            print(
+                f"newest session per node: {len(kept)} of {len(paths)} file(s) "
+                "(use --all-sessions for the rest)",
+                flush=True,
+            )
+        paths = kept
 
     if not paths:
         print("no input files", file=sys.stderr)
