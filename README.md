@@ -1,6 +1,6 @@
-# wimon — ESP32 Wi-Fi monitor
+# ESP32 Wi-Fi Monitor Cluster
 
-[![CI](https://github.com/OWNER/wimon/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/wimon/actions/workflows/ci.yml)
+[![CI](https://github.com/xtr-hub/esp32-wifi-monitor-cluster/actions/workflows/ci.yml/badge.svg)](https://github.com/xtr-hub/esp32-wifi-monitor-cluster/actions/workflows/ci.yml)
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 
@@ -177,7 +177,7 @@ and open an activated shell.
 
 ```powershell
 idf.py set-target esp32c5     # or esp32c3
-idf.py menuconfig             # ESP Wi-Fi Monitor: SSID, collector IP, OTA token
+idf.py menuconfig             # ESP32 Wi-Fi Monitor Cluster: SSID, collector IP, OTA token
 idf.py build
 idf.py -p COMx flash monitor
 ```
@@ -251,6 +251,12 @@ device/software versions, sensitive text, HTTP bodies, certificate identities
 and raw frame bytes. `--show-private` is an explicit opt-in. The PCAP files
 themselves are unchanged and still contain the captured bytes; handle them as
 sensitive data.
+
+## Support
+
+Usage questions, bug reports and security reports are handled through the
+channels listed in [SUPPORT.md](SUPPORT.md). There is no commercial support
+or guaranteed response time.
 
 ## License
 

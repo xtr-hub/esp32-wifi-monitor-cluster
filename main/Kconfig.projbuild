@@ -1,4 +1,4 @@
-menu "ESP Wi-Fi Monitor"
+menu "ESP32 Wi-Fi Monitor Cluster"
 
     config MONITOR_WIFI_SSID
         string "Wi-Fi SSID"

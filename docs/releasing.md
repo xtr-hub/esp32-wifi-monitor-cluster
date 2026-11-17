@@ -6,8 +6,8 @@ contains deployment credentials.
 
 ## One-time setup
 
-1. Create the GitHub repository (suggested name: `wimon`) and push `main`.
-2. Replace the `OWNER` placeholder in:
+1. The repository is `xtr-hub/esp32-wifi-monitor-cluster` and `main` is the default branch.
+2. If you rename the repository or transfer it to another owner, update:
    - `README.md` (CI badge)
    - `pyproject.toml` (`[project.urls]`)
    - `.github/ISSUE_TEMPLATE/config.yml`

@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security report
-    url: https://github.com/OWNER/wimon/security/advisories/new
+    url: https://github.com/xtr-hub/esp32-wifi-monitor-cluster/security/advisories/new
     about: Report vulnerabilities privately; do not open a public issue.
   - name: Usage and deployment questions
-    url: https://github.com/OWNER/wimon/discussions
+    url: https://github.com/xtr-hub/esp32-wifi-monitor-cluster/discussions
     about: Ask for help with a specific board, capture or deployment.

@@ -2,7 +2,7 @@
 #
 # These are safe, non-secret build settings. Real credentials live in the local
 # `sdkconfig`, which is git-ignored; copy the blanks below there and fill them in,
-# or run `idf.py menuconfig` and edit "ESP Wi-Fi Monitor".
+# or run `idf.py menuconfig` and edit "ESP32 Wi-Fi Monitor Cluster".
 # Alternatively pass them on the command line, e.g.:
 #   idf.py -DMONITOR_WIFI_SSID='"esp-lab"' build
 

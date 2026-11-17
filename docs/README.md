@@ -17,6 +17,7 @@ Project policies live at the repository root:
 - [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md)
 - [SECURITY.md](../SECURITY.md)
+- [SUPPORT.md](../SUPPORT.md)
 - [NOTICE](../NOTICE)
 - [CHANGELOG.md](../CHANGELOG.md)
 - [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)

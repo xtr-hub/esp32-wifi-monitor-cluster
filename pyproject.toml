@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "wimon"
 version = "0.1.0"
-description = "Host toolkit and firmware companion for an ESP32 Wi-Fi monitor cluster"
+description = "Firmware and the wimon host toolkit for the ESP32 Wi-Fi Monitor Cluster"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "GPL-2.0-or-later"
 license-files = ["LICENSE"]
-authors = [{ name = "The wimon contributors" }]
+authors = [{ name = "37863", email = "3786329580@qq.com" }]
 keywords = ["esp32", "wifi", "802.11", "pcap", "packet-capture", "monitor-mode"]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -29,9 +29,9 @@ dev = ["ruff>=0.6", "pytest>=8"]
 wimon = "wimon.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/OWNER/wimon"
-Issues = "https://github.com/OWNER/wimon/issues"
-Security = "https://github.com/OWNER/wimon/security/advisories"
+Homepage = "https://github.com/xtr-hub/esp32-wifi-monitor-cluster"
+Issues = "https://github.com/xtr-hub/esp32-wifi-monitor-cluster/issues"
+Security = "https://github.com/xtr-hub/esp32-wifi-monitor-cluster/security/advisories"
 
 [tool.hatch.build.targets.wheel]
 packages = ["wimon"]
