@@ -39,8 +39,8 @@ keep working.
 ## Verification
 
 - All **105 top-level functions and classes** in the old bytecode have a
-  matching definition in the recovered source (no missing or extra top-level
-  symbols).
+  matching definition in the recovered base before the post-recovery additions
+  were merged.
 - Decoding the first **200 frames** of a real capture produced **byte-identical
   console output** with the old `.pyc` and the recovered source, both before and
   after the patch merge.

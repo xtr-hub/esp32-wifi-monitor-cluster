@@ -8,9 +8,10 @@ licenses of those components govern their use.
 
 | Component | License | Use |
 |---|---|---|
-| [Scapy](https://scapy.net/) 2.7+ | GPL-2.0-only | Optional packet dissection in `wimon/pcap_dump.py` and live interface capture. |
+| [Scapy](https://scapy.net/) 2.7+ | GPL-2.0-only | Packet dissection in the decoder and live interface capture. |
+| [cryptography](https://cryptography.io/) 42+ | Apache-2.0 OR BSD-3-Clause | QUIC Initial key derivation and AEAD decryption. |
 
-Scapy is not vendored. Install it with `py -m pip install -r requirements.txt`.
+Neither package is vendored. Install them with `py -m pip install -r requirements.txt`.
 Because Scapy is GPL-2.0-only, the combined distribution is offered under
 GPL-2.0-or-later (which includes GPL-2.0).
 

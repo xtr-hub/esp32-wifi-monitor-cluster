@@ -19,7 +19,7 @@ Each was reproduced before being fixed, and the fixes are covered by tests.
 | `xQueueReceive` on a possibly-NULL queue | If the ~80 KB capture queue fails to allocate, the task asserts or crashes into a boot loop | Skip the drain when the queue is NULL and keep telemetry running |
 | Hand-rolled JSON parser matched keys inside string values | `{"name":"\"collector_ip\":\"9.9.9.9\""}` was parsed as an IP update | Require a `{`/`,` separator before a key, reject any body containing a backslash, and reject trailing garbage after a number |
 
-### Decoder (`pcap_dump.py`)
+### Decoder (`pcap_dump_core.py`)
 
 Two privacy leaks were found in the matchers added in the previous pass, plus a
 latent one in the TXT redaction that predates them:

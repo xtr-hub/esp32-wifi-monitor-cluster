@@ -1,6 +1,7 @@
 # wimon - Wi-Fi monitor toolkit
 
-Requirements: CPython 3.12+ (tested on 3.12) and Scapy 2.7+. See the repository
+Requirements: CPython 3.12+ (tested on 3.12), Scapy 2.7+, and cryptography 42+
+(for QUIC Initial decryption). See the repository
 [README](../README.md) for installation, firmware builds and the authorized-use
 notice.
 
@@ -50,7 +51,7 @@ ESP32 node  ──UDP──▶  collector.py  ──▶  captures/*.pcap   (raw 
                                               │
                                       frames.py               (source layer)
                                               │
-                                      pcap_dump.py            (decode layer)
+                                      pcap_dump_core.py       (decode layer)
                                               │
                                     cli.py / watch.py         (view layer)
 ```
@@ -59,7 +60,7 @@ ESP32 node  ──UDP──▶  collector.py  ──▶  captures/*.pcap   (raw 
 |---|---|---|
 | Transport | `collector.py` | Receive UDP datagrams, write raw frames to PCAP. No decoding. |
 | Source | `frames.py` | Turn a PCAP file, a growing PCAP, or a live monitor interface into frames. Knows nothing about ESP32. |
-| Decode | `pcap_dump.py` + `pcap_dump_core.py` | Frame bytes → one-line summary. Privacy masking lives here. |
+| Decode | `pcap_dump_core.py` (loaded by `pcap_dump.py`) | Frame bytes → one-line summary. Privacy masking lives here. |
 | View | `cli.py`, `watch.py` | Dispatch, filter, format, print. No protocol logic. |
 | Store | `events.py` | Read-only queries over the decoded-event SQLite database. |
 | Control | `node.py`, `ota_deploy.py` | Talk to a node's HTTP endpoints. |

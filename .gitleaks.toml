@@ -1,0 +1,21 @@
+# Gitleaks configuration for this repository.
+#
+# The default rules stay enabled. The allowlist only covers obvious test
+# fixtures, documentation placeholders and the component hashes in the
+# ESP-IDF lock file; it is deliberately narrow.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures, documented placeholders and dependency hashes"
+paths = [
+  '''wimon/tests/.*''',
+  '''dependencies\.lock''',
+]
+regexes = [
+  '''secret-token''',
+  '''change-me''',
+  '''generate-a-unique-token''',
+  '''<your-hotspot-passphrase>''',
+]

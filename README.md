@@ -73,8 +73,9 @@ Build the database with `wimon events convert` and query it with the
 
 ## Quick start (host)
 
-Requirements: **CPython 3.12+** (tested on 3.12) and
-[Scapy](https://scapy.net/) 2.7+.
+Requirements: **CPython 3.12+** (tested on 3.12),
+[Scapy](https://scapy.net/) 2.7+, and
+[cryptography](https://cryptography.io/) 42+ (QUIC Initial decryption).
 
 ```powershell
 py -m pip install -r requirements.txt
@@ -254,5 +255,6 @@ sensitive data.
 ## License
 
 This project is licensed under the **GNU General Public License v2.0 or later**
-(`GPL-2.0-or-later`). See [LICENSE](LICENSE). It depends on Scapy, which is
-distributed under GPL-2.0-only; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+(`GPL-2.0-or-later`). See [LICENSE](LICENSE) and [NOTICE](NOTICE). It depends on Scapy
+(GPL-2.0-only) and cryptography (Apache-2.0 OR BSD-3-Clause); see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

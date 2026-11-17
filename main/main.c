@@ -74,7 +74,14 @@ static void destination_from_config(void)
 {
     g_destination.sin_family = AF_INET;
     g_destination.sin_port = htons(g_config.collector_port);
-    g_destination.sin_addr.s_addr = inet_addr(g_config.collector_ip);
+    // Use the same parser as /config and NVS validation. inet_addr() rejects
+    // 255.255.255.255 and accepts legacy shorthand such as "10.1".
+    struct in_addr parsed_address;
+    if (inet_pton(AF_INET, g_config.collector_ip, &parsed_address) == 1) {
+        g_destination.sin_addr = parsed_address;
+    } else {
+        g_destination.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    }
 }
 
 static void config_load(void)

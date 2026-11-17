@@ -1,0 +1,11 @@
+wimon — ESP32 Wi-Fi monitor
+Copyright (C) 2026 The wimon contributors
+
+This project is licensed under the GNU General Public License, version 2 or
+later. See LICENSE.
+
+The decoder core in wimon/pcap_dump_core.py was recovered from the original
+development session; see docs/decoder-core.md for provenance and verification.
+
+Third-party components and their licenses are listed in
+THIRD_PARTY_NOTICES.md.
