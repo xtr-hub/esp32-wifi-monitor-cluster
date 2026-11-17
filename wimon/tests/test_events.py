@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import struct
 import sys
 import tempfile
@@ -18,6 +19,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "wimon"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _support import SkipTest  # noqa: E402
 
 import cli  # noqa: E402
 import events  # noqa: E402
@@ -79,6 +83,13 @@ def real_frames_by_protocol(wanted: list[str], limit_per: int = 1) -> list[bytes
     Results are cached: scanning the whole capture takes seconds, and every test
     asks for the same few frames.
     """
+    if os.environ.get("WIMON_SKIP_CAPTURE_TESTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        raise SkipTest("WIMON_SKIP_CAPTURE_TESTS is set")
+
     key = ",".join(sorted(wanted))
     if key in _FRAME_CACHE:
         return list(_FRAME_CACHE[key])
@@ -90,7 +101,7 @@ def real_frames_by_protocol(wanted: list[str], limit_per: int = 1) -> list[bytes
         key=lambda p: p.stat().st_size,
     )
     if not files:
-        return []
+        raise SkipTest("no capture files; capture-dependent events tests need real input")
     wanted = list(wanted)
     found: list[bytes] = []
     counts: dict[str, int] = {name: 0 for name in wanted}
@@ -107,6 +118,8 @@ def real_frames_by_protocol(wanted: list[str], limit_per: int = 1) -> list[bytes
                     counts[name] += 1
         if all(value >= limit_per for value in counts.values()):
             break
+    if not found:
+        raise SkipTest("no matching frames in captures/; the test needs real input")
     _FRAME_CACHE[key] = list(found)
     return found
 
@@ -115,8 +128,6 @@ def real_frames_by_protocol(wanted: list[str], limit_per: int = 1) -> list[bytes
 def sample_database():
     """Index a few real frames of different protocols into SQLite."""
     frames = real_frames_by_protocol(["UDP/3289", "UDP/22222", "UDP/10004"])
-    if not frames:
-        raise AssertionError("no suitable frames in captures/; the test needs real input")
 
     directory = Path(tempfile.mkdtemp())
     pcap = directory / "sample.pcap"
@@ -374,9 +385,13 @@ def test_private_rows_are_hidden_by_default() -> None:
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0
+    skipped = 0
     for test in tests:
         try:
             test()
+        except SkipTest as error:
+            skipped += 1
+            print(f"skip {test.__name__}: {error}")
         except AssertionError as error:
             failures += 1
             print(f"FAIL {test.__name__}: {error}")
@@ -387,7 +402,8 @@ def main() -> int:
             print(f"ok   {test.__name__}")
         finally:
             pd.SHOW_PRIVATE = False
-    print(f"\n{len(tests) - failures}/{len(tests)} passed")
+    print(f"\n{len(tests) - failures - skipped}/{len(tests)} passed"
+          f"{f', {skipped} skipped' if skipped else ''}")
     return 1 if failures else 0
 
 
