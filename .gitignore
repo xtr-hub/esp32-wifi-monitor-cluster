@@ -10,7 +10,9 @@ build-*/
 sdkconfig
 sdkconfig.old
 sdkconfig.ci
-dependencies.lock
+
+# Local ESP-IDF installation-manager configuration (machine-specific paths).
+eim_config.toml
 
 # Managed components are re-fetched by the component manager from idf_component.yml.
 managed_components/
@@ -37,8 +39,11 @@ decoded-*.txt
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
 .venv/
 venv/
+dist/
+*.egg-info/
 
 # --- Editors and OS ---
 .vscode/
@@ -47,7 +52,3 @@ venv/
 .commandcode/
 Thumbs.db
 desktop.ini
-
-# The retained decoder core is a build artifact of the upstream decoder, but it
-# is the only copy of the bytecode parser and pcap_dump.py loads it at runtime.
-!wimon/pcap_dump_core.pyc

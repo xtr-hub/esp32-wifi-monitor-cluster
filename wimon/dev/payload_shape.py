@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> None:
     wanted = {int(p) for p in args.ports.split(",")}
     payloads: dict[int, list[bytes]] = collections.defaultdict(list)
 
-    paths = sorted(args.captures.glob("*_aa-bb-cc-*.pcap"),
+    paths = sorted(args.captures.glob("*.pcap"),
                    key=lambda p: p.stat().st_mtime, reverse=True)[:args.files]
 
     for path in paths:

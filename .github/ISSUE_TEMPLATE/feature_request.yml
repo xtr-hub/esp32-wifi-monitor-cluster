@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an improvement to the firmware, toolkit or documentation.
+title: "[feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do that the project does not support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behaviour you would like, including any protocol or privacy implications.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This change preserves the default privacy masking (no identifying data without `--show-private`).
+          required: true
+        - label: I am willing to open a pull request for this.

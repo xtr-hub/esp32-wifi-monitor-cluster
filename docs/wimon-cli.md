@@ -1,5 +1,9 @@
 # wimon - Wi-Fi monitor toolkit
 
+Requirements: CPython 3.12+ (tested on 3.12) and Scapy 2.7+. See the repository
+[README](../README.md) for installation, firmware builds and the authorized-use
+notice.
+
 `wimon` is the command-line front end. Commands follow a **`noun verb [args]`**
 shape so the surface is predictable:
 
@@ -55,7 +59,7 @@ ESP32 node  ──UDP──▶  collector.py  ──▶  captures/*.pcap   (raw 
 |---|---|---|
 | Transport | `collector.py` | Receive UDP datagrams, write raw frames to PCAP. No decoding. |
 | Source | `frames.py` | Turn a PCAP file, a growing PCAP, or a live monitor interface into frames. Knows nothing about ESP32. |
-| Decode | `pcap_dump.py` (+ `pcap_dump_core.pyc`) | Frame bytes → one-line summary. Privacy masking lives here. |
+| Decode | `pcap_dump.py` + `pcap_dump_core.py` | Frame bytes → one-line summary. Privacy masking lives here. |
 | View | `cli.py`, `watch.py` | Dispatch, filter, format, print. No protocol logic. |
 | Store | `events.py` | Read-only queries over the decoded-event SQLite database. |
 | Control | `node.py`, `ota_deploy.py` | Talk to a node's HTTP endpoints. |
@@ -324,7 +328,7 @@ py wimon\cli.py self doctor       # environment check
 
 The capture-dependent tests skip themselves when `captures/` has no PCAP, so the
 suite also runs on a fresh clone. `self doctor` reports the interpreter, whether
-`pcap_dump_core.pyc` loads, the capture directory size, the telemetry file, and
+`pcap_dump_core.py` loads, the capture directory size, the telemetry file, and
 whether scapy is available for live-interface capture.
 
 ## Privacy
@@ -350,7 +354,7 @@ py wimon\ota_deploy.py --list
 py wimon\query_decoded_events.py decoded-events.sqlite --limit 30
 ```
 
-`pcap_dump.py` loads `pcap_dump_core.pyc` from its own directory, so those two
+`pcap_dump.py` loads `pcap_dump_core.py` from its own directory, so those two
 files must stay together.
 
 ## `dev/`

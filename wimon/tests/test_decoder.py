@@ -16,6 +16,7 @@ the suite still runs on a fresh clone.
 
 from __future__ import annotations
 
+import os
 import re
 import struct
 import sys
@@ -231,9 +232,18 @@ def test_17702_reports_measured_delta_only_after_two_frames() -> None:
 # --------------------------------------------------------------------------
 # coverage against a real capture
 # --------------------------------------------------------------------------
+def capture_tests_enabled() -> bool:
+    """Honour the explicit opt-out used by CI and capture-heavy workstations."""
+    return os.environ.get("WIMON_SKIP_CAPTURE_TESTS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 def newest_capture() -> Path | None:
     """The newest capture, used for coverage checks."""
-    if not CAPTURES.is_dir():
+    if not capture_tests_enabled() or not CAPTURES.is_dir():
         return None
     files = sorted(CAPTURES.glob("*.pcap"), key=lambda p: p.stat().st_mtime, reverse=True)
     return files[0] if files else None
@@ -247,7 +257,7 @@ def baseline_captures() -> list[Path]:
     as a new device appears. The baseline is the corpus the decoder was validated
     against; new captures are checked for parser errors and privacy instead.
     """
-    if not CAPTURES.is_dir():
+    if not capture_tests_enabled() or not CAPTURES.is_dir():
         return []
     baseline = sorted(CAPTURES.glob("20261113T16*.pcap"))
     if baseline:

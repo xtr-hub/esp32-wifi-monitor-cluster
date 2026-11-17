@@ -1,0 +1,43 @@
+name: Firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "main/**"
+      - "CMakeLists.txt"
+      - "sdkconfig.defaults"
+      - "main/idf_component.yml"
+      - ".github/workflows/firmware.yml"
+  pull_request:
+    paths:
+      - "main/**"
+      - "CMakeLists.txt"
+      - "sdkconfig.defaults"
+      - "main/idf_component.yml"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ESP-IDF 6.1 / ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32c3, esp32c5]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.1
+          target: ${{ matrix.target }}
+          command: build

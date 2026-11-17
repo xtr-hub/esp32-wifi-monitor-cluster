@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--top", type=int, default=40)
     args = ap.parse_args(argv)
 
-    paths = sorted(args.captures.glob("*_aa-bb-cc-*.pcap"),
+    paths = sorted(args.captures.glob("*.pcap"),
                    key=lambda p: p.stat().st_mtime, reverse=True)[:args.files]
     if not paths:
         print("no pcap files")

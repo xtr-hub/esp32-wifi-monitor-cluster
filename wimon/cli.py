@@ -29,9 +29,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+from _version import __version__  # noqa: E402
 
 
 def _split(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -724,7 +727,7 @@ def self_doctor(argv: list[str]) -> int:
     try:
         import pcap_dump
 
-        core = Path(__file__).parent / "pcap_dump_core.pyc"
+        core = Path(__file__).parent / "pcap_dump_core.py"
         print(f"decoder core      ok  {core.name} ({core.stat().st_size} bytes)")
         summary, _ = pcap_dump.decode_frame(
             b"\x00\x00\x08\x00\x08\x00\x00\x00" + bytes(24)
@@ -853,7 +856,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version="wimon 1.0")
+    parser.add_argument("--version", action="version", version=f"wimon {__version__}")
     sub = parser.add_subparsers(dest="noun", metavar="<noun>")
 
     for noun, verbs in VERBS.items():
@@ -876,6 +879,9 @@ def main(argv: list[str] | None = None) -> int:
     head, tail = _split(argv)
 
     if not head:
+        if tail[:1] == ["--version"]:
+            print(f"wimon {__version__}")
+            return 0
         build_parser().print_help()
         return 0
 
@@ -884,7 +890,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if head[0] == "--version":
-        print("wimon 1.0")
+        print(f"wimon {__version__}")
         return 0
 
     noun = head[0]
